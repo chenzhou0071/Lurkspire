@@ -167,13 +167,13 @@ func (r *Room) handleInputMsg(m inputMsg) {
 		return
 	}
 	p.LastReportTick = r.tick
-	// T3 简化：直接按输入移动（T4 换成服务端验证版）
-	dirX := float32(m.in.MoveX)
-	dirZ := float32(m.in.MoveY)
-	dt := 1.0 / float32(r.cfg.TickHz)
-	p.X += dirX * r.cfg.Speed * dt
-	p.Z += dirZ * r.cfg.Speed * dt
-	p.Yaw = m.in.Yaw
+	// 服务端验证：非法输入不更新位置，连续非法标记（踢出候选）
+	ok := CheckMove(p, m.in)
+	MarkViolation(p, ok)
+	if !ok {
+		return
+	}
+	p.ApplyInput(m.in, 1.0/float32(r.cfg.TickHz))
 }
 
 // ---- 管理器 ----

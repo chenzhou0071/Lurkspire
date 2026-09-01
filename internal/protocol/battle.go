@@ -43,6 +43,7 @@ const (
 	BtnSlide    uint8 = 1 << 3
 	BtnJump     uint8 = 1 << 4
 	BtnDashAtk  uint8 = 1 << 5
+	BtnWallRun  uint8 = 1 << 6 // 跑墙中（服务端按跑墙速度积分——速度仍服务端权威）
 )
 
 // HitEvent 命中通知（服务端 → 客户端表现用）
