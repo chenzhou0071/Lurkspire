@@ -19,7 +19,7 @@ type Config struct {
 	SpawnRange float32 // 出生点随机范围
 }
 
-// Player 房间内玩家状态（与 protocol.PlayerState 同构，多两个服务器内部字段）
+// Player 房间内玩家状态（与 protocol.PlayerState 同构，多服务器内部字段）
 type Player struct {
 	UID            uint32
 	X, Y, Z        float32
@@ -30,8 +30,24 @@ type Player struct {
 	Block          float32
 	Anim           uint8
 	LastReportTick int64 // 最后上报帧（超时判定用）
-	Suspicious     int   // 非法移动次数（T4 验证用）
+	Suspicious     int   // 非法移动次数（踢出候选）
+	// 战斗状态（服务端权威）
+	Score       int     // 击杀数
+	AimX, AimY  float32 // 准星方向角（度）
+	Buttons     uint8   // 最近上报按钮（格挡/武器状态判定用）
+	FireCd      int     // 射速冷却（tick 数）
+	DeadTicks   int     // 死亡中剩余 tick（>0 = 等待重生）
+	LockCharges int     // 锁头存量（10s 一发，存 3）
+	LockTimer   float32 // 锁头充能计时（秒）
 }
+
+// Blocking 是否格挡姿态（按钮格挡位按下且条足够——供命中结算）
+func (p *Player) Blocking() bool {
+	return p.Buttons&protocol.BtnBlock != 0 && p.Block >= CombatBlockMin
+}
+
+// Dead 是否死亡等待重生
+func (p *Player) Dead() bool { return p.DeadTicks > 0 }
 
 // Snapshot 转协议状态（广播用）
 func (p *Player) Snapshot() protocol.PlayerState {
@@ -47,6 +63,7 @@ type inputMsg struct {
 	uid  uint32
 	in   protocol.InputReport
 	snap chan []protocol.PlayerState // 非 nil = 快照请求（复用输入 channel 串行化）
+	drain chan []protocol.HitEvent   // 非 nil = 事件取走请求
 }
 
 type joinMsg struct {
@@ -63,12 +80,18 @@ type Room struct {
 	stop chan struct{}
 
 	players map[uint32]*Player
+	combat  *Combat
 
 	inputCh chan inputMsg
 	joinCh  chan joinMsg
 	leaveCh chan leaveMsg
+	brCh    chan func(msgID uint16, body []byte)
 
-	tick int64
+	tick          int64
+	pendingEvents []protocol.HitEvent // 本帧命中事件（T6 广播）
+
+	// 广播回调（T6 网关推送用；nil = 无消费者——单测直接读 pendingEvents）
+	onBroadcast func(msgID uint16, body []byte)
 }
 
 func NewRoom(id string, cfg Config) *Room {
@@ -86,7 +109,9 @@ func NewRoom(id string, cfg Config) *Room {
 		inputCh: make(chan inputMsg, 64),
 		joinCh:  make(chan joinMsg),
 		leaveCh: make(chan leaveMsg),
+		brCh:    make(chan func(msgID uint16, body []byte), 4),
 	}
+	r.combat = NewCombat(r.players, MapWalls)
 	go r.loop()
 	return r
 }
@@ -121,6 +146,18 @@ func (r *Room) StateSnapshot() []protocol.PlayerState {
 	return <-snapCh
 }
 
+// SetBroadcast 注册广播回调（网关推送；单测可留空）
+func (r *Room) SetBroadcast(fn func(msgID uint16, body []byte)) {
+	r.brCh <- fn
+}
+
+// DrainEvents 取走本帧命中/死亡事件（T6 广播源；loop 外调用走 channel）
+func (r *Room) DrainEvents() []protocol.HitEvent {
+	ch := make(chan []protocol.HitEvent, 1)
+	r.inputCh <- inputMsg{uid: 0, in: protocol.InputReport{}, drain: ch}
+	return <-ch
+}
+
 // loop 30Hz 主循环
 func (r *Room) loop() {
 	ticker := time.NewTicker(time.Second / time.Duration(r.cfg.TickHz))
@@ -131,14 +168,32 @@ func (r *Room) loop() {
 			return
 		case <-ticker.C:
 			r.tick++
+			r.combat.TickCombat() // 冷却/充能/重生推进
+			if r.onBroadcast != nil {
+				r.broadcastState() // 状态广播（T6 完善事件推送）
+			}
 		case m := <-r.inputCh:
 			r.handleInputMsg(m)
 		case m := <-r.joinCh:
 			m.result <- r.addPlayer(m.uid)
 		case m := <-r.leaveCh:
 			delete(r.players, m.uid)
+		case fn := <-r.brCh:
+			r.onBroadcast = fn
 		}
 	}
+}
+
+// broadcastState 广播全体状态（30Hz——T6 网关推送走 onBroadcast）
+func (r *Room) broadcastState() {
+	if r.onBroadcast == nil {
+		return
+	}
+	states := make([]protocol.PlayerState, 0, len(r.players))
+	for _, p := range r.players {
+		states = append(states, p.Snapshot())
+	}
+	r.onBroadcast(protocol.MsgBattleState, protocol.EncodeState(states))
 }
 
 func (r *Room) addPlayer(uid uint32) error {
@@ -162,6 +217,11 @@ func (r *Room) handleInputMsg(m inputMsg) {
 		m.snap <- states
 		return
 	}
+	if m.drain != nil {
+		m.drain <- r.pendingEvents
+		r.pendingEvents = nil
+		return
+	}
 	p := r.players[m.uid]
 	if p == nil {
 		return
@@ -173,7 +233,27 @@ func (r *Room) handleInputMsg(m inputMsg) {
 	if !ok {
 		return
 	}
+	// 记录战斗相关输入（瞄准角/按钮——命中判定用）
+	p.AimX = m.in.AimX
+	p.AimY = m.in.AimY
+	p.Buttons = m.in.Buttons
 	p.ApplyInput(m.in, 1.0/float32(r.cfg.TickHz))
+	// 武器动作分发（服务端权威命中——事件收集待广播）
+	var events []protocol.HitEvent
+	switch {
+	case m.in.Buttons&protocol.BtnFire != 0:
+		events = r.combat.ApplyShot(p)
+	case m.in.Buttons&protocol.BtnSword != 0:
+		events = r.combat.ApplySword(p)
+	case m.in.Buttons&protocol.BtnDashAtk != 0:
+		events = r.combat.ApplyDash(p)
+	}
+	if m.in.Buttons&protocol.BtnLock != 0 {
+		events = append(events, r.combat.ApplyLock(p)...)
+	}
+	if len(events) > 0 {
+		r.pendingEvents = append(r.pendingEvents, events...)
+	}
 }
 
 // ---- 管理器 ----

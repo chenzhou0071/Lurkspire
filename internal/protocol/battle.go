@@ -44,6 +44,7 @@ const (
 	BtnJump     uint8 = 1 << 4
 	BtnDashAtk  uint8 = 1 << 5
 	BtnWallRun  uint8 = 1 << 6 // 跑墙中（服务端按跑墙速度积分——速度仍服务端权威）
+	BtnLock     uint8 = 1 << 7 // 锁头发射（充能消耗服务端记账）
 )
 
 // HitEvent 命中通知（服务端 → 客户端表现用）
