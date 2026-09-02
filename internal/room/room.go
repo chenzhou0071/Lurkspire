@@ -13,10 +13,12 @@ var ErrRoomFull = errors.New("room: full")
 
 // Config 房间配置（M2 固定值；M3 可由匹配系统注入）
 type Config struct {
-	MaxPlayers int
-	TickHz     int
-	Speed      float32 // T3 简化移动速度（T4 换成验证版）
-	SpawnRange float32 // 出生点随机范围
+	MaxPlayers  int
+	TickHz      int
+	Speed       float32 // T3 简化移动速度（T4 换成验证版）
+	SpawnRange  float32 // 出生点随机范围
+	SettleScore int     // 先到 N 分结算（0 = 关闭分数结算）
+	SettleTicks int64   // 时长上限（tick 数；0 = 无限）
 }
 
 // Player 房间内玩家状态（与 protocol.PlayerState 同构，多服务器内部字段）
@@ -37,6 +39,7 @@ type Player struct {
 	Buttons     uint8   // 最近上报按钮（格挡/武器状态判定用）
 	FireCd      int     // 射速冷却（tick 数）
 	DeadTicks   int     // 死亡中剩余 tick（>0 = 等待重生）
+	JustDied    bool    // 本帧刚死（广播 Death 后清除）
 	LockCharges int     // 锁头存量（10s 一发，存 3）
 	LockTimer   float32 // 锁头充能计时（秒）
 }
@@ -89,6 +92,7 @@ type Room struct {
 
 	tick          int64
 	pendingEvents []protocol.HitEvent // 本帧命中事件（T6 广播）
+	settled       bool                // 结算已广播（锁存不重复）
 
 	// 广播回调（T6 网关推送用；nil = 无消费者——单测直接读 pendingEvents）
 	onBroadcast func(msgID uint16, body []byte)
@@ -170,7 +174,7 @@ func (r *Room) loop() {
 			r.tick++
 			r.combat.TickCombat() // 冷却/充能/重生推进
 			if r.onBroadcast != nil {
-				r.broadcastState() // 状态广播（T6 完善事件推送）
+				r.broadcastTick() // 状态 + 事件 + 结算检查（30Hz）
 			}
 		case m := <-r.inputCh:
 			r.handleInputMsg(m)
@@ -184,16 +188,50 @@ func (r *Room) loop() {
 	}
 }
 
-// broadcastState 广播全体状态（30Hz——T6 网关推送走 onBroadcast）
-func (r *Room) broadcastState() {
-	if r.onBroadcast == nil {
-		return
-	}
+// broadcastTick 每帧推送：State（30Hz）→ 命中事件 → 击杀（Death）→ 结算检查
+func (r *Room) broadcastTick() {
+	// 状态广播（全部玩家）
 	states := make([]protocol.PlayerState, 0, len(r.players))
 	for _, p := range r.players {
 		states = append(states, p.Snapshot())
 	}
 	r.onBroadcast(protocol.MsgBattleState, protocol.EncodeState(states))
+	// 命中事件（逐条）
+	for _, ev := range r.pendingEvents {
+		r.onBroadcast(protocol.MsgBattleHit, protocol.EncodeHit(&ev))
+		// 击杀广播：本帧刚死的目标（死亡确认/计分提示）
+		if t := r.players[ev.Target]; t != nil && t.JustDied {
+			r.onBroadcast(protocol.MsgBattleDeath, protocol.EncodeHit(&ev))
+			t.JustDied = false
+		}
+	}
+	r.pendingEvents = nil
+	// 结算检查（分数/时长——锁存只广播一次）
+	if !r.settled {
+		if r.settleReason() != "" {
+			r.settled = true
+			entries := make([]protocol.SettleEntry, 0, len(r.players))
+			for _, p := range r.players {
+				entries = append(entries, protocol.SettleEntry{UID: p.UID, Score: uint16(p.Score)})
+			}
+			r.onBroadcast(protocol.MsgBattleSettle, protocol.EncodeSettle(entries))
+		}
+	}
+}
+
+// settleReason 返回结算原因（"" = 未到结算条件）
+func (r *Room) settleReason() string {
+	if r.cfg.SettleScore > 0 {
+		for _, p := range r.players {
+			if p.Score >= r.cfg.SettleScore {
+				return "score"
+			}
+		}
+	}
+	if r.cfg.SettleTicks > 0 && r.tick >= r.cfg.SettleTicks {
+		return "time"
+	}
+	return ""
 }
 
 func (r *Room) addPlayer(uid uint32) error {
@@ -203,8 +241,10 @@ func (r *Room) addPlayer(uid uint32) error {
 	if len(r.players) >= r.cfg.MaxPlayers {
 		return ErrRoomFull
 	}
-	// 出生点：随机散布在出生圈内（T3 简化：固定出生点由客户端决定，M2 用圆心）
-	r.players[uid] = &Player{UID: uid, HP: 100, Block: 100, LastReportTick: r.tick}
+	// 出生点：随机出生位（含高层平台——复活不贴脸）
+	sp := PickSpawn()
+	r.players[uid] = &Player{UID: uid, HP: 100, Block: 100,
+		X: sp.X, Y: sp.Y, Z: sp.Z, LastReportTick: r.tick}
 	return nil
 }
 

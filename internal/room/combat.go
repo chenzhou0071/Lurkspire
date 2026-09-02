@@ -140,10 +140,11 @@ func (c *Combat) hit(shooter, target *Player, dmg uint8) protocol.HitEvent {
 	} else {
 		target.HP -= ev.Damage
 	}
-	// 死亡：击杀计分 + 重生计时
+	// 死亡：击杀计分 + 重生计时（JustDied 标记供 Death 广播）
 	if target.HP == 0 {
 		shooter.Score++
 		target.DeadTicks = RespawnTicks
+		target.JustDied = true
 	}
 	return ev
 }
@@ -294,13 +295,14 @@ func (c *Combat) TickCombat() {
 				p.LockCharges++
 			}
 		}
-		// 死亡重生：倒计时结束复活（满血回出生圈）
+		// 死亡重生：倒计时结束复活（满血回随机出生点——防守尸）
 		if p.DeadTicks > 0 {
 			p.DeadTicks--
 			if p.DeadTicks == 0 {
+				sp := PickSpawn()
 				p.HP = 100
 				p.Block = 100
-				p.X, p.Y, p.Z = 0, 0, 0 // 简化出生点（客户端出生区中心）
+				p.X, p.Y, p.Z = sp.X, sp.Y, sp.Z
 			}
 		}
 	}

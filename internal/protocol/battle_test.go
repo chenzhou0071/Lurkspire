@@ -65,3 +65,11 @@ func TestDecodeInput_ShortData_ReturnsZero(t *testing.T) {
 		t.Fatalf("want zero InputReport, got %+v", got)
 	}
 }
+
+func TestEncodeSettle_RoundTrip(t *testing.T) {
+	entries := []SettleEntry{{UID: 1, Score: 20}, {UID: 2, Score: 12}, {UID: 3, Score: 3}}
+	got := DecodeSettle(EncodeSettle(entries))
+	if len(got) != 3 || got[0] != entries[0] || got[2] != entries[2] {
+		t.Fatalf("settle roundtrip mismatch:\n got %+v\nwant %+v", got, entries)
+	}
+}

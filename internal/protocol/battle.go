@@ -163,3 +163,43 @@ func DecodeHit(b []byte) HitEvent {
 		Headshot: b[9] != 0,
 	}
 }
+
+// SettleEntry 结算条目：uid u32 + score u16 = 6B
+type SettleEntry struct {
+	UID   uint32
+	Score uint16
+}
+
+const settleEntrySize = 6
+
+// EncodeSettle 结算排名 → 字节流（count u8 + N×6）
+func EncodeSettle(entries []SettleEntry) []byte {
+	b := make([]byte, 1+len(entries)*settleEntrySize)
+	b[0] = uint8(len(entries))
+	for i, e := range entries {
+		o := 1 + i*settleEntrySize
+		binary.BigEndian.PutUint32(b[o:], e.UID)
+		binary.BigEndian.PutUint16(b[o+4:], e.Score)
+	}
+	return b
+}
+
+// DecodeSettle 字节流 → 结算排名（短数据返回 nil）
+func DecodeSettle(b []byte) []SettleEntry {
+	if len(b) < 1 {
+		return nil
+	}
+	n := int(b[0])
+	if len(b) < 1+n*settleEntrySize {
+		return nil
+	}
+	entries := make([]SettleEntry, n)
+	for i := 0; i < n; i++ {
+		o := 1 + i*settleEntrySize
+		entries[i] = SettleEntry{
+			UID:   binary.BigEndian.Uint32(b[o:]),
+			Score: binary.BigEndian.Uint16(b[o+4:]),
+		}
+	}
+	return entries
+}
