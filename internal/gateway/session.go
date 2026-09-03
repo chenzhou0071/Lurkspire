@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"lurkspire/server/internal/protocol"
 	"lurkspire/server/internal/room"
@@ -19,19 +20,23 @@ type Session struct {
 	UID  uint32
 	Room *room.Room // 当前房间（nil = 未入房）
 
-	mu        sync.Mutex // 写锁（防并发写 conn）
-	closeOnce sync.Once
-	done      chan struct{}
+	writeCh chan []byte // 写队列（广播/应答入队——写协程消费）
+	// 满队丢旧帧：状态广播 30Hz 可丢不可卡（慢客户端只慢自己）
+	closed atomic.Bool
+	once   sync.Once
 }
 
+// NewSession 启动读+写双协程
 func NewSession(conn net.Conn, hub *Hub, uid uint32) *Session {
-	return &Session{
-		conn: conn,
-		fr:   protocol.NewFrameReader(conn),
-		hub:  hub,
-		UID:  uid,
-		done: make(chan struct{}),
+	s := &Session{
+		conn:    conn,
+		fr:      protocol.NewFrameReader(conn),
+		hub:     hub,
+		UID:     uid,
+		writeCh: make(chan []byte, 128),
 	}
+	go s.writeLoop() // 写协程：队列 → conn（阻塞只影响自己）
+	return s
 }
 
 // Serve 阻塞读循环：直到连接断开（每帧分发）
@@ -49,25 +54,43 @@ func (s *Session) Serve() {
 	}
 }
 
-// Send 安全写一帧（并发安全）
-func (s *Session) Send(b []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	select {
-	case <-s.done:
-		return // 已关闭
-	default:
+// writeLoop 写协程：取队列 → 写 conn（慢客户端只卡自己的写协程）
+func (s *Session) writeLoop() {
+	for b := range s.writeCh {
+		if _, err := s.conn.Write(b); err != nil {
+			log.Printf("session %d write: %v", s.UID, err)
+			return // 写失败 = 连接坏 → 触发关闭
+		}
 	}
-	if _, err := s.conn.Write(b); err != nil {
-		log.Printf("session %d write: %v", s.UID, err)
+}
+
+// Send 入队一帧（非阻塞——队列满丢旧帧，游戏帧可丢不可卡）
+func (s *Session) Send(b []byte) {
+	if s.closed.Load() {
+		return
+	}
+	select {
+	case s.writeCh <- b:
+	default:
+		// 队列满：丢弃最旧的广播帧（keep newest——30Hz 状态下旧帧无意义）
+		select {
+		case <-s.writeCh:
+		default:
+		}
+		select {
+		case s.writeCh <- b:
+		default:
+			s.Close() // 真满到写不进 = 对端死亡——断开
+		}
 	}
 }
 
 // Close 关闭连接（幂等）：出房 + 断开
 func (s *Session) Close() {
-	s.closeOnce.Do(func() {
-		close(s.done)
+	s.once.Do(func() {
+		s.closed.Store(true)
 		s.hub.Leave(s)
+		close(s.writeCh) // 写协程退出
 		s.conn.Close()
 	})
 }
