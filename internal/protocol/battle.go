@@ -203,3 +203,13 @@ func DecodeSettle(b []byte) []SettleEntry {
 	}
 	return entries
 }
+
+// JoinOK 入房成功包：房间名(u8 len + bytes) + 自己 uid(u32) + 现有玩家状态
+func EncodeJoinOK(roomName string, selfUID uint32, states []PlayerState) []byte {
+	b := []byte{byte(len(roomName))}
+	b = append(b, roomName...)
+	var tmp [4]byte
+	binary.BigEndian.PutUint32(tmp[:], selfUID)
+	b = append(b, tmp[:]...)
+	return append(b, EncodeState(states)...)
+}

@@ -123,6 +123,9 @@ func NewRoom(id string, cfg Config) *Room {
 // Stop 停止循环（房间销毁）
 func (r *Room) Stop() { close(r.stop) }
 
+// ID 房间名
+func (r *Room) ID() string { return r.id }
+
 // AddPlayer 入房（满员拒绝）；阻塞等待 loop 处理结果
 func (r *Room) AddPlayer(uid uint32) error {
 	ch := make(chan error, 1)
