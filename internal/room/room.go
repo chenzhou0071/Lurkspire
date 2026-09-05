@@ -43,6 +43,7 @@ type Player struct {
 	JustDied    bool    // 本帧刚死（广播 Death 后清除）
 	LockCharges int     // 锁头存量（10s 一发，存 3）
 	LockTimer   float32 // 锁头充能计时（秒）
+	LockCd      int     // 锁头发射冷却（tick——防按钮多帧重复触发）
 }
 
 // Blocking 是否格挡姿态（按钮格挡位按下且条足够——供命中结算）

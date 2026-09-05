@@ -253,12 +253,14 @@ func (c *Combat) ApplyDash(shooter *Player) []protocol.HitEvent {
 
 // ApplyLock 锁头（必中最近目标——无视偏移；范围 60m 内直线判定，
 // 无墙检测与客户端一致：锁头是"点名"必中）
-// 充能消耗：由调用方先检查（LockCharges > 0）
+// 充能消耗：由调用方先检查（LockCharges > 0）；发射后 1s 冷却防重复触发
+// （客户端 BtnLock 可能持续多帧——冷却保证一次蓄力只发一发）
 func (c *Combat) ApplyLock(shooter *Player) []protocol.HitEvent {
-	if shooter.Dead() || shooter.LockCharges <= 0 {
+	if shooter.Dead() || shooter.LockCharges <= 0 || shooter.LockCd > 0 {
 		return nil
 	}
 	shooter.LockCharges--
+	shooter.LockCd = 30 // 1 秒冷却（30Hz）
 	// 最近存活目标（无视墙——锁头必中机制）
 	var best *Player
 	bestDist := float32(math.Inf(1))
@@ -286,6 +288,9 @@ func (c *Combat) TickCombat() {
 	for _, p := range c.players {
 		if p.FireCd > 0 {
 			p.FireCd--
+		}
+		if p.LockCd > 0 {
+			p.LockCd-- // 锁头冷却倒数
 		}
 		// 锁头充能：10s 一发，存 3 封顶
 		if p.LockCharges < LockMaxCharges {

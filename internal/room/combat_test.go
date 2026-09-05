@@ -154,6 +154,30 @@ func TestLock_NoCharge_Nothing(t *testing.T) {
 	}
 }
 
+func TestLock_Cooldown_NoDoubleShot(t *testing.T) {
+	c, p1, _ := newCombatPair()
+	p1.LockCharges = 3
+	// 第一发（按钮多帧模拟——连续调 5 次）
+	if events := c.ApplyLock(p1); len(events) != 1 {
+		t.Fatal("first lock should hit")
+	}
+	for i := 0; i < 5; i++ {
+		if events := c.ApplyLock(p1); len(events) != 0 {
+			t.Fatalf("lock cooldown violated at %d: %+v", i, events)
+		}
+	}
+	if p1.LockCharges != 2 {
+		t.Fatalf("only 1 charge consumed: want 2 left, got %d", p1.LockCharges)
+	}
+	// 冷却结束后可再发
+	for i := 0; i < 30; i++ {
+		c.TickCombat()
+	}
+	if events := c.ApplyLock(p1); len(events) != 1 {
+		t.Fatal("lock should fire after cooldown")
+	}
+}
+
 func TestRespawn_AfterTicks(t *testing.T) {
 	c, p1, p2 := newCombatPair()
 	p2.HP = 10
