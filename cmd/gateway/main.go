@@ -15,11 +15,10 @@ func main() {
 	flag.Parse()
 
 	// 单进程合一：房间 Manager 内嵌网关（M3 拆双进程时换成 RPC 客户端）
+	// CF 式无限对局：无分数/时长结算——房间开到人走光（0 = 关闭结算）
 	m := room.NewManager(room.Config{
-		MaxPlayers:  8,
-		TickHz:      30,
-		SettleScore: 20,   // 先到 20 分结算
-		SettleTicks: 9000, // 兜底 5 分钟（30Hz × 300s）
+		MaxPlayers: 8,
+		TickHz:     30,
 	})
 	hub := gateway.NewHub(m)
 	srv := gateway.NewServer(*addr, hub)

@@ -36,6 +36,7 @@ type Player struct {
 	FirstReport    bool  // 首次上报（出生传送合法——跳过位移校验）
 	// 战斗状态（服务端权威）
 	Score       int     // 击杀数
+	Deaths      int     // 死亡数（计分板）
 	AimX, AimY  float32 // 准星方向角（度）
 	Buttons     uint8   // 最近上报按钮（格挡/武器状态判定用）
 	FireCd      int     // 射速冷却（tick 数）
@@ -61,6 +62,7 @@ func (p *Player) Snapshot() protocol.PlayerState {
 	return protocol.PlayerState{
 		UID: p.UID, X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw,
 		HP: p.HP, Weapon: p.Weapon, Alt: p.Alt, Block: p.Block, Anim: p.Anim,
+		Score: uint16(p.Score), Deaths: uint16(p.Deaths),
 	}
 }
 

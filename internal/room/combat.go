@@ -143,6 +143,7 @@ func (c *Combat) hit(shooter, target *Player, dmg uint8) protocol.HitEvent {
 	// 死亡：击杀计分 + 重生计时（JustDied 标记供 Death 广播）
 	if target.HP == 0 {
 		shooter.Score++
+		target.Deaths++
 		target.DeadTicks = RespawnTicks
 		target.JustDied = true
 	}

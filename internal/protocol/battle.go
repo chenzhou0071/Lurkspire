@@ -12,16 +12,18 @@ func mathFloat32frombits(b uint32) float32 { return math.Float32frombits(b) }
 // ---- 结构体定义 ----
 
 // PlayerState 玩家状态（服务端广播，EncodeState 序列化）
-// 布局：uid u32 | x f32 | y f32 | z f32 | yaw f32 | hp u8 | weapon u8 | alt u8 | block f32 | anim u8 = 28B
+// 布局：uid u32 | x f32 | y f32 | z f32 | yaw f32 | hp u8 | weapon u8 | alt u8 | block f32 | anim u8 | score u16 | deaths u16 = 36B
 type PlayerState struct {
-	UID    uint32
+	UID     uint32
 	X, Y, Z float32
-	Yaw    float32
-	HP     uint8
-	Weapon uint8 // 0=枪 1=刀
-	Alt    uint8 // 交替枪号（表现用）
-	Block  float32 // 格挡条
-	Anim   uint8 // 动画状态（跑墙/滑铲/空中等）
+	Yaw     float32
+	HP      uint8
+	Weapon  uint8 // 0=枪 1=刀
+	Alt     uint8 // 交替枪号（表现用）
+	Block   float32 // 格挡条
+	Anim    uint8 // 动画状态（跑墙/滑铲/空中等）
+	Score   uint16 // 击杀数（计分板）
+	Deaths  uint16 // 死亡数（计分板）
 }
 
 // InputReport 客户端输入上报（移动/位置/瞄准/按钮/武器/动作）
@@ -63,22 +65,23 @@ type HitEvent struct {
 // ---- 编解码 ----
 
 const (
-	stateSize = 28
+	stateSize = 36
 	inputSize = 29
 	hitSize   = 10
 )
 
 // 动作码（客户端上报——服务端广播给他人显示）
 const (
-	AnimGround = 0
-	AnimWall   = 1
-	AnimSlide  = 2
-	AnimAir    = 3
-	AnimSwing  = 4 // 挥砍中
-	AnimDash   = 5 // 冲刺斩中
+	AnimGround     = 0
+	AnimWallLeft   = 1 // 跑墙中（墙在右——身体左倾）
+	AnimWallRight  = 2 // 跑墙中（墙在左——身体右倾）
+	AnimSlide      = 3
+	AnimAir        = 4
+	AnimSwing      = 5 // 挥砍中
+	AnimDash       = 6 // 冲刺斩中
 )
 
-// EncodeState 玩家列表 → 字节流（count u8 + N×28）
+// EncodeState 玩家列表 → 字节流（count u8 + N×36）
 func EncodeState(states []PlayerState) []byte {
 	b := make([]byte, 1+len(states)*stateSize)
 	b[0] = uint8(len(states))
@@ -94,6 +97,9 @@ func EncodeState(states []PlayerState) []byte {
 		b[o+22] = s.Alt
 		binary.BigEndian.PutUint32(b[o+23:], mathFloat32bits(s.Block))
 		b[o+27] = s.Anim
+		binary.BigEndian.PutUint16(b[o+28:], s.Score)
+		binary.BigEndian.PutUint16(b[o+30:], s.Deaths)
+		binary.BigEndian.PutUint32(b[o+32:], 0) // 预留 4B（对齐 36——后续字段扩展）
 	}
 	return b
 }
@@ -121,6 +127,8 @@ func DecodeState(b []byte) []PlayerState {
 			Alt:    b[o+22],
 			Block:  mathFloat32frombits(binary.BigEndian.Uint32(b[o+23:])),
 			Anim:   b[o+27],
+			Score:  binary.BigEndian.Uint16(b[o+28:]),
+			Deaths: binary.BigEndian.Uint16(b[o+30:]),
 		}
 	}
 	return states

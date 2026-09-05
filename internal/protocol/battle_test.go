@@ -38,7 +38,7 @@ func TestEncodeHit_RoundTrip(t *testing.T) {
 
 func TestEncodeState_GoldenBytes(t *testing.T) {
 	states := []PlayerState{
-		{UID: 1, X: 1, Y: 2, Z: 3, Yaw: 4, HP: 100, Weapon: 0, Alt: 1, Block: 90, Anim: 0},
+		{UID: 1, X: 1, Y: 2, Z: 3, Yaw: 4, HP: 100, Weapon: 0, Alt: 1, Block: 90, Anim: 0, Score: 7, Deaths: 3},
 	}
 	b := EncodeState(states)
 	want := []byte{
@@ -52,7 +52,10 @@ func TestEncodeState_GoldenBytes(t *testing.T) {
 		0x00, // weapon=0
 		0x01, // alt=1
 		0x42, 0xB4, 0x00, 0x00, // block=90.0
-		0x00, // anim=0
+		0x00,       // anim=0
+		0x00, 0x07, // score=7
+		0x00, 0x03, // deaths=3
+		0x00, 0x00, 0x00, 0x00, // 预留 4B
 	}
 	if !bytes.Equal(b, want) {
 		t.Fatalf("golden mismatch:\n got %v\nwant %v", b, want)
