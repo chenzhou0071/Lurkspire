@@ -284,6 +284,9 @@ func (r *Room) handleInputMsg(m inputMsg) {
 	p.AimX = m.in.AimX
 	p.AimY = m.in.AimY
 	p.Buttons = m.in.Buttons
+	// 武器/动作（广播给其他玩家显示——RemotePlayer 渲染）
+	p.Weapon = m.in.Weapon
+	p.Anim = m.in.Anim
 	p.ApplyInput(m.in, 1.0/float32(r.cfg.TickHz))
 	// 武器动作分发（服务端权威命中——事件收集待广播）
 	var events []protocol.HitEvent

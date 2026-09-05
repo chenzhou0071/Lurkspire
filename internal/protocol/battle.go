@@ -24,8 +24,8 @@ type PlayerState struct {
 	Anim   uint8 // 动画状态（跑墙/滑铲/空中等）
 }
 
-// InputReport 客户端输入上报（移动/位置/瞄准/按钮）
-// 布局：moveX i8 | moveY i8 | yaw f32 | buttons u8 | aimX f32 | aimY f32 | x f32 | y f32 | z f32 = 27B
+// InputReport 客户端输入上报（移动/位置/瞄准/按钮/武器/动作）
+// 布局：moveX i8 | moveY i8 | yaw f32 | buttons u8 | aimX f32 | aimY f32 | x f32 | y f32 | z f32 | weapon u8 | anim u8 = 29B
 // 位置 = 客户端本地移动结果（含跳跃/二段跳等机动）——服务端只验证合理性（防瞬移/超速）
 // buttons 位：bit0 开火 bit1 刀挥 bit2 格挡 bit3 滑铲 bit4 跳 bit5 冲刺斩 bit6 跑墙 bit7 锁头
 type InputReport struct {
@@ -36,6 +36,8 @@ type InputReport struct {
 	AimX    float32 // 准星世界方向（水平角，度）
 	AimY    float32 // 准星俯仰角（度）
 	X, Y, Z float32 // 本地位置（服务端验证后采纳）
+	Weapon  uint8   // 当前武器 0=枪 1=刀（广播给其他人显示）
+	Anim    uint8   // 动作码 0=地面 1=跑墙 2=滑铲 3=空中 4=挥砍 5=冲刺（广播给其他人显示）
 }
 
 const (
@@ -62,8 +64,18 @@ type HitEvent struct {
 
 const (
 	stateSize = 28
-	inputSize = 27
+	inputSize = 29
 	hitSize   = 10
+)
+
+// 动作码（客户端上报——服务端广播给他人显示）
+const (
+	AnimGround = 0
+	AnimWall   = 1
+	AnimSlide  = 2
+	AnimAir    = 3
+	AnimSwing  = 4 // 挥砍中
+	AnimDash   = 5 // 冲刺斩中
 )
 
 // EncodeState 玩家列表 → 字节流（count u8 + N×28）
@@ -114,7 +126,7 @@ func DecodeState(b []byte) []PlayerState {
 	return states
 }
 
-// EncodeInput 输入上报 → 字节流（27B）
+// EncodeInput 输入上报 → 字节流（29B）
 func EncodeInput(in *InputReport) []byte {
 	b := make([]byte, inputSize)
 	b[0] = uint8(in.MoveX)
@@ -126,6 +138,8 @@ func EncodeInput(in *InputReport) []byte {
 	binary.BigEndian.PutUint32(b[15:], mathFloat32bits(in.X))
 	binary.BigEndian.PutUint32(b[19:], mathFloat32bits(in.Y))
 	binary.BigEndian.PutUint32(b[23:], mathFloat32bits(in.Z))
+	b[27] = in.Weapon
+	b[28] = in.Anim
 	return b
 }
 
@@ -144,6 +158,8 @@ func DecodeInput(b []byte) InputReport {
 		X:       mathFloat32frombits(binary.BigEndian.Uint32(b[15:])),
 		Y:       mathFloat32frombits(binary.BigEndian.Uint32(b[19:])),
 		Z:       mathFloat32frombits(binary.BigEndian.Uint32(b[23:])),
+		Weapon:  b[27],
+		Anim:    b[28],
 	}
 }
 
