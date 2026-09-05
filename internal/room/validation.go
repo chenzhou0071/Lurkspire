@@ -58,17 +58,26 @@ func MarkViolation(p *Player, ok bool) {
 func IsSuspicious(p *Player) bool { return p.Suspicious >= MaxSuspicious }
 
 // ApplyInput 合法输入 → 积分移动（服务端权威位置）
+// move 是"本地相对"方向（W=玩家面朝方向）——按上报朝向转世界轴：
+// yaw 0=+Z 逆时针正（与服务端 DirFromAngles 同系）
 // 斜向归一化：斜走不快（|(1,1)| 归一化后每轴 0.707）
 func (p *Player) ApplyInput(in protocol.InputReport, dt float32) {
-	dirX := float32(in.MoveX)
-	dirZ := float32(in.MoveY)
-	l := float32(math.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
+	mx := float32(in.MoveX)
+	mz := float32(in.MoveY)
+	l := float32(math.Sqrt(float64(mx*mx + mz*mz)))
 	if l > 1 {
-		dirX /= l
-		dirZ /= l
+		mx /= l
+		mz /= l
 	}
+	// 本地相对 → 世界：yaw 旋转（yaw 弧度）
+	yr := p.Yaw * math.Pi / 180
+	cosY := float32(math.Cos(float64(yr)))
+	sinY := float32(math.Sin(float64(yr)))
+	dirX := mx*cosY + mz*sinY
+	dirZ := -mx*sinY + mz*cosY
 	speed := SpeedFor(in.Buttons)
 	p.X += dirX * speed * dt
 	p.Z += dirZ * speed * dt
+	// Yaw 覆盖为上报值（同帧后续积分用新朝向）
 	p.Yaw = in.Yaw
 }

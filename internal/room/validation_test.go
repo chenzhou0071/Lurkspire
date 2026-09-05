@@ -90,6 +90,16 @@ func TestApplyInput_Diagonal_Normalized(t *testing.T) {
 	}
 }
 
+func TestApplyInput_YawRotatesMove(t *testing.T) {
+	// 面向 +X（yaw=90°）按 W（MoveY=1）→ 应朝 +X 移动（不是 +Z）
+	p := newTestPlayer()
+	p.Yaw = 90
+	p.ApplyInput(protocol.InputReport{MoveX: 0, MoveY: 1}, 1)
+	if p.X < RunSpeed-0.1 || p.Z > 0.1 {
+		t.Fatalf("yaw=90 W should move +X: x=%v z=%v", p.X, p.Z)
+	}
+}
+
 func TestRoom_HandleInput_Illegal_NotMoved(t *testing.T) {
 	r := NewRoom("rv", testConfig())
 	defer r.Stop()
