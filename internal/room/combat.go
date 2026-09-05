@@ -261,18 +261,25 @@ func (c *Combat) ApplyLock(shooter *Player) []protocol.HitEvent {
 	}
 	shooter.LockCharges--
 	shooter.LockCd = 30 // 1 秒冷却（30Hz）
-	// 最近存活目标（无视墙——锁头必中机制）
+	// 射手准星方向（AimX 水平/AimY 俯仰——度）——锁头锥形 20°（防锁到背后）
+	dx, dy, dz := DirFromAngles(shooter.AimX, shooter.AimY)
+	cosArc := float32(math.Cos(20 * math.Pi / 180))
+	// 最近存活目标（无视墙——锁头必中机制；准星 20° 内）
 	var best *Player
 	bestDist := float32(math.Inf(1))
 	for _, p := range c.players {
 		if p == shooter || p.Dead() {
 			continue
 		}
-		ex, ey, ez := p.X-shooter.X, p.Y-shooter.Y, p.Z-shooter.Z
+		ex, ey, ez := p.X-shooter.X, (p.Y + 1) - shooter.Y, p.Z-shooter.Z
 		d := float32(math.Sqrt(float64(ex*ex + ey*ey + ez*ez)))
 		if d <= float32(LockRange) && d < bestDist {
-			bestDist = d
-			best = p
+			// 方向夹角过滤（准星锥形）
+			dot := (ex*dx + ey*dy + ez*dz) / d
+			if dot >= cosArc {
+				bestDist = d
+				best = p
+			}
 		}
 	}
 	if best == nil {
