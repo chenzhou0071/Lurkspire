@@ -178,6 +178,44 @@ func TestLock_Cooldown_NoDoubleShot(t *testing.T) {
 	}
 }
 
+func TestSword_Cooldown_NoMultiHit(t *testing.T) {
+	c, p1, p2 := newCombatPair()
+	p2.X = 0
+	p2.Z = 2 // 正前方 2m
+	p1.AimX = 0
+	// 挥砍一次 + 多帧连按（左键按住模拟）
+	if events := c.ApplySword(p1); len(events) != 1 {
+		t.Fatal("first swing should hit")
+	}
+	hpAfterFirst := p2.HP // 50 伤后
+	for i := 0; i < 5; i++ {
+		if events := c.ApplySword(p1); len(events) != 0 {
+			t.Fatalf("sword cooldown violated at %d: %+v", i, events)
+		}
+	}
+	if p2.HP != hpAfterFirst {
+		t.Fatalf("multi-frame sword must not repeat damage: hp=%d", p2.HP)
+	}
+}
+
+func TestDash_Cooldown_NoMultiHit(t *testing.T) {
+	c, p1, p2 := newCombatPair()
+	p2.X = 0
+	p2.Z = 5 // 路径内
+	p1.AimX = 0
+	if events := c.ApplyDash(p1); len(events) != 1 {
+		t.Fatal("first dash should hit")
+	}
+	for i := 0; i < 5; i++ {
+		if events := c.ApplyDash(p1); len(events) != 0 {
+			t.Fatalf("dash cooldown violated at %d: %+v", i, events)
+		}
+	}
+	if p2.HP != 50 {
+		t.Fatalf("multi-frame dash must not repeat damage: hp=%d", p2.HP)
+	}
+}
+
 func TestRespawn_AfterTicks(t *testing.T) {
 	c, p1, p2 := newCombatPair()
 	p2.HP = 10

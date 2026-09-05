@@ -186,10 +186,12 @@ func (c *Combat) ApplyShot(shooter *Player) []protocol.HitEvent {
 }
 
 // ApplySword 刀近战（前方 3m 扇形 60°）：范围内全员一刀 50
+// 冷却 0.25s（防左键按住多帧重复触发——客户端冷却服务端镜像）
 func (c *Combat) ApplySword(shooter *Player) []protocol.HitEvent {
-	if shooter.Dead() {
+	if shooter.Dead() || shooter.SwordCd > 0 {
 		return nil
 	}
+	shooter.SwordCd = 8 // 0.25s（30Hz）
 	_, _, dz := shooter.AimX, shooter.AimY, shooter.Yaw // 面向：用 Yaw 简化扇形朝向
 	_ = dz
 	events := []protocol.HitEvent{}
@@ -221,10 +223,12 @@ func (c *Combat) ApplySword(shooter *Player) []protocol.HitEvent {
 }
 
 // ApplyDash 冲刺斩（前方 6m 路径 ±30°）：路径内全员一刀 50
+// 冷却 1.5s（防 Shift 按住多帧重复触发）
 func (c *Combat) ApplyDash(shooter *Player) []protocol.HitEvent {
-	if shooter.Dead() {
+	if shooter.Dead() || shooter.DashCd > 0 {
 		return nil
 	}
+	shooter.DashCd = 45 // 1.5s（30Hz）
 	yawR := shooter.Yaw * math.Pi / 180
 	fx := float32(math.Sin(float64(yawR)))
 	fz := float32(math.Cos(float64(yawR)))
@@ -298,6 +302,12 @@ func (c *Combat) TickCombat() {
 		}
 		if p.LockCd > 0 {
 			p.LockCd-- // 锁头冷却倒数
+		}
+		if p.SwordCd > 0 {
+			p.SwordCd-- // 挥砍冷却倒数
+		}
+		if p.DashCd > 0 {
+			p.DashCd-- // 冲刺冷却倒数
 		}
 		// 锁头充能：10s 一发，存 3 封顶
 		if p.LockCharges < LockMaxCharges {

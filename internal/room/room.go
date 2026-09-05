@@ -44,6 +44,8 @@ type Player struct {
 	LockCharges int     // 锁头存量（10s 一发，存 3）
 	LockTimer   float32 // 锁头充能计时（秒）
 	LockCd      int     // 锁头发射冷却（tick——防按钮多帧重复触发）
+	SwordCd     int     // 挥砍冷却（0.25s=8 tick——防左键多帧连发秒杀）
+	DashCd      int     // 冲刺斩冷却（1.5s=45 tick——防 Shift 多帧连发）
 }
 
 // Blocking 是否格挡姿态（按钮格挡位按下且条足够——供命中结算）
