@@ -303,6 +303,7 @@ func (c *Combat) TickCombat() {
 				p.HP = 100
 				p.Block = 100
 				p.X, p.Y, p.Z = sp.X, sp.Y, sp.Z
+				p.FirstReport = true // 复活后首帧跳过位移校验（传送）
 			}
 		}
 	}

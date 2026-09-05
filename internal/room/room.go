@@ -33,6 +33,7 @@ type Player struct {
 	Anim           uint8
 	LastReportTick int64 // 最后上报帧（超时判定用）
 	Suspicious     int   // 非法移动次数（踢出候选）
+	FirstReport    bool  // 首次上报（出生传送合法——跳过位移校验）
 	// 战斗状态（服务端权威）
 	Score       int     // 击杀数
 	AimX, AimY  float32 // 准星方向角（度）
@@ -247,7 +248,7 @@ func (r *Room) addPlayer(uid uint32) error {
 	// 出生点：随机出生位（含高层平台——复活不贴脸）
 	sp := PickSpawn()
 	r.players[uid] = &Player{UID: uid, HP: 100, Block: 100,
-		X: sp.X, Y: sp.Y, Z: sp.Z, LastReportTick: r.tick}
+		X: sp.X, Y: sp.Y, Z: sp.Z, LastReportTick: r.tick, FirstReport: true}
 	return nil
 }
 

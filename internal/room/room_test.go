@@ -40,30 +40,6 @@ func TestRoom_AddPlayer_Capacity(t *testing.T) {
 	}
 }
 
-func TestRoom_HandleInput_MovesPlayer(t *testing.T) {
-	r := NewRoom("r2", testConfig())
-	defer r.Stop()
-	if err := r.AddPlayer(1); err != nil {
-		t.Fatal(err)
-	}
-	before := waitSnapshot(r, 1)[0]
-
-	// 按 W（MoveY=+1）前进 30 帧（1 秒）
-	for i := 0; i < 30; i++ {
-		r.HandleInput(1, protocol.InputReport{MoveX: 0, MoveY: 1})
-		time.Sleep(35 * time.Millisecond)
-	}
-	after := waitSnapshot(r, 1)[0]
-	if after.Z <= before.Z {
-		t.Fatalf("player should move forward (+Z): before=%v after=%v", before.Z, after.Z)
-	}
-	// 速度校验：16/s × 1s ≈ 16（±2 容差——测试环境帧抖动）
-	dist := after.Z - before.Z
-	if dist < 14 || dist > 18 {
-		t.Fatalf("speed mismatch: want ~16, got %v", dist)
-	}
-}
-
 func TestRoom_RemovePlayer_SnapshotExcludes(t *testing.T) {
 	r := NewRoom("r3", testConfig())
 	defer r.Stop()

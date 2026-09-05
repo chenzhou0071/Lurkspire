@@ -85,8 +85,9 @@ func TestBroadcast_KillEmitsHitAndDeath(t *testing.T) {
 	p2.X, p2.Y, p2.Z = 0, 0, 10
 	p2.HP = 20
 	p1.AimX, p1.AimY = 0, 0
-	// 开火（绕过输入校验——直接内部设置后 HandleInput 触发）
-	r.HandleInput(1, protocol.InputReport{MoveX: 0, MoveY: 0, AimX: 0, AimY: 0, Buttons: protocol.BtnFire})
+	p1.FirstReport = false // 已就位（跳过首报例外——正常校验）
+	// 开火（上报带位置——否则采纳会把摆位重置）
+	r.HandleInput(1, protocol.InputReport{MoveX: 0, MoveY: 0, AimX: 0, AimY: 0, Buttons: protocol.BtnFire, X: 0, Y: 0, Z: 0})
 	deadline := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
 		_, hits, deaths, _ := col.counts()
@@ -121,7 +122,8 @@ func TestBroadcast_SettleOnScore_Once(t *testing.T) {
 	p2.X, p2.Y, p2.Z = 0, 0, 10
 	p2.HP = 10
 	p1.AimX, p1.AimY = 0, 0
-	r.HandleInput(1, protocol.InputReport{MoveX: 0, MoveY: 0, AimX: 0, AimY: 0, Buttons: protocol.BtnFire})
+	p1.FirstReport = false
+	r.HandleInput(1, protocol.InputReport{MoveX: 0, MoveY: 0, AimX: 0, AimY: 0, Buttons: protocol.BtnFire, X: 0, Y: 0, Z: 0})
 	// 等结算广播
 	deadline := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {

@@ -24,16 +24,18 @@ type PlayerState struct {
 	Anim   uint8 // 动画状态（跑墙/滑铲/空中等）
 }
 
-// InputReport 客户端输入上报（移动/瞄准/按钮）
-// 布局：moveX i8 | moveY i8 | yaw f32 | buttons u8 | aimX f32 | aimY f32 = 15B
-// buttons 位：bit0 开火 bit1 刀挥 bit2 格挡 bit3 滑铲 bit4 跳 bit5 冲刺斩
+// InputReport 客户端输入上报（移动/位置/瞄准/按钮）
+// 布局：moveX i8 | moveY i8 | yaw f32 | buttons u8 | aimX f32 | aimY f32 | x f32 | y f32 | z f32 = 27B
+// 位置 = 客户端本地移动结果（含跳跃/二段跳等机动）——服务端只验证合理性（防瞬移/超速）
+// buttons 位：bit0 开火 bit1 刀挥 bit2 格挡 bit3 滑铲 bit4 跳 bit5 冲刺斩 bit6 跑墙 bit7 锁头
 type InputReport struct {
-	MoveX  int8
-	MoveY  int8
-	Yaw    float32
+	MoveX   int8
+	MoveY   int8
+	Yaw     float32
 	Buttons uint8
-	AimX   float32 // 准星世界方向（水平角）
-	AimY   float32 // 准星俯仰角
+	AimX    float32 // 准星世界方向（水平角，度）
+	AimY    float32 // 准星俯仰角（度）
+	X, Y, Z float32 // 本地位置（服务端验证后采纳）
 }
 
 const (
@@ -59,9 +61,9 @@ type HitEvent struct {
 // ---- 编解码 ----
 
 const (
-	stateSize  = 28
-	inputSize  = 15
-	hitSize    = 10
+	stateSize = 28
+	inputSize = 27
+	hitSize   = 10
 )
 
 // EncodeState 玩家列表 → 字节流（count u8 + N×28）
@@ -112,7 +114,7 @@ func DecodeState(b []byte) []PlayerState {
 	return states
 }
 
-// EncodeInput 输入上报 → 字节流（15B）
+// EncodeInput 输入上报 → 字节流（27B）
 func EncodeInput(in *InputReport) []byte {
 	b := make([]byte, inputSize)
 	b[0] = uint8(in.MoveX)
@@ -121,6 +123,9 @@ func EncodeInput(in *InputReport) []byte {
 	b[6] = in.Buttons
 	binary.BigEndian.PutUint32(b[7:], mathFloat32bits(in.AimX))
 	binary.BigEndian.PutUint32(b[11:], mathFloat32bits(in.AimY))
+	binary.BigEndian.PutUint32(b[15:], mathFloat32bits(in.X))
+	binary.BigEndian.PutUint32(b[19:], mathFloat32bits(in.Y))
+	binary.BigEndian.PutUint32(b[23:], mathFloat32bits(in.Z))
 	return b
 }
 
@@ -136,6 +141,9 @@ func DecodeInput(b []byte) InputReport {
 		Buttons: b[6],
 		AimX:    mathFloat32frombits(binary.BigEndian.Uint32(b[7:])),
 		AimY:    mathFloat32frombits(binary.BigEndian.Uint32(b[11:])),
+		X:       mathFloat32frombits(binary.BigEndian.Uint32(b[15:])),
+		Y:       mathFloat32frombits(binary.BigEndian.Uint32(b[19:])),
+		Z:       mathFloat32frombits(binary.BigEndian.Uint32(b[23:])),
 	}
 }
 
