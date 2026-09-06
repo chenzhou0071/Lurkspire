@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	ErrAccountExists = errors.New("lobby: account exists")
-	ErrBadAccount    = errors.New("lobby: account not found")
-	ErrBadPassword   = errors.New("lobby: wrong password")
-	ErrBadToken      = errors.New("lobby: invalid token")
-	ErrBadInput      = errors.New("lobby: bad input")
+	ErrAccountExists  = errors.New("lobby: account exists")
+	ErrNicknameExists = errors.New("lobby: nickname exists")
+	ErrBadAccount     = errors.New("lobby: account not found")
+	ErrBadPassword    = errors.New("lobby: wrong password")
+	ErrBadToken       = errors.New("lobby: invalid token")
+	ErrBadInput       = errors.New("lobby: bad input")
 )
 
 // Token 有效期（M3 演示 24h 够用）
@@ -35,7 +36,7 @@ func NewService(s store.Store, secret string) *Service {
 	return &Service{store: s, secret: []byte(secret)}
 }
 
-// Register 注册：账号唯一 + 密码 bcrypt + 昵称必填
+// Register 注册：账号唯一 + 昵称唯一（好友搜索凭据）+ 密码 bcrypt
 func (s *Service) Register(account, password, nickname string) (uint64, error) {
 	if account == "" || len(account) > 64 || password == "" || nickname == "" || len(nickname) > 32 {
 		return 0, ErrBadInput
@@ -49,9 +50,21 @@ func (s *Service) Register(account, password, nickname string) (uint64, error) {
 		if err == store.ErrAccountExists {
 			return 0, ErrAccountExists
 		}
+		if err == store.ErrNicknameExists {
+			return 0, ErrNicknameExists
+		}
 		return 0, err
 	}
 	return u.ID, nil
+}
+
+// SearchByNickname 按昵称搜索用户（加好友凭据——昵称唯一）
+func (s *Service) SearchByNickname(nickname string) (*store.User, error) {
+	u, err := s.store.GetUserByNickname(nickname)
+	if err != nil {
+		return nil, ErrBadAccount
+	}
+	return u, nil
 }
 
 // Login 登录：校验密码 → 发 Token（HMAC(uid|expire)）

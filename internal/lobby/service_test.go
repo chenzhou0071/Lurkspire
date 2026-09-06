@@ -38,6 +38,22 @@ func TestRegister_Duplicate_Rejected(t *testing.T) {
 	if _, err := s.Register("bob", "pw2", "另一个"); err != ErrAccountExists {
 		t.Fatalf("duplicate register: want ErrAccountExists, got %v", err)
 	}
+	// 昵称唯一（不同账号同昵称也拒绝）
+	if _, err := s.Register("bob2", "pw", "鲍勃"); err != ErrNicknameExists {
+		t.Fatalf("duplicate nickname: want ErrNicknameExists, got %v", err)
+	}
+}
+
+func TestSearchByNickname_FindUser(t *testing.T) {
+	s := newTestService()
+	s.Register("frank", "pw", "弗兰克")
+	u, err := s.SearchByNickname("弗兰克")
+	if err != nil || u.Nickname != "弗兰克" {
+		t.Fatalf("search by nickname: %+v err=%v", u, err)
+	}
+	if _, err := s.SearchByNickname("不存在的人"); err != ErrBadAccount {
+		t.Fatalf("search missing: want ErrBadAccount, got %v", err)
+	}
 }
 
 func TestLogin_WrongPassword(t *testing.T) {

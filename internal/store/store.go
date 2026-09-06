@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrAccountExists = errors.New("store: account already exists")
-	ErrNotFound      = errors.New("store: not found")
+	ErrAccountExists  = errors.New("store: account already exists")
+	ErrNicknameExists = errors.New("store: nickname already exists")
+	ErrNotFound       = errors.New("store: not found")
 )
 
 // User 账号记录
@@ -26,8 +27,9 @@ type User struct {
 
 // Store 存储接口（MemStore 供测试；MySQLStore 生产）
 type Store interface {
-	CreateUser(u *User) error              // ErrAccountExists 重名
+	CreateUser(u *User) error              // ErrAccountExists/ErrNicknameExists
 	GetUserByAccount(account string) (*User, error)
+	GetUserByNickname(nickname string) (*User, error) // 好友按昵称搜索
 	GetUserByID(id uint64) (*User, error)
 	SetEquip(id uint64, equip int) error
 	// 好友（T3 用）
@@ -41,6 +43,7 @@ type MemStore struct {
 	mu      sync.Mutex
 	nextID  uint64
 	users   map[string]*User // account → user
+	byNick  map[string]*User // nickname → user（唯一）
 	byID    map[uint64]*User
 	friends map[uint64]map[uint64]bool // uid → 好友集合
 }
@@ -48,6 +51,7 @@ type MemStore struct {
 func NewMemStore() *MemStore {
 	return &MemStore{
 		users:   make(map[string]*User),
+		byNick:  make(map[string]*User),
 		byID:    make(map[uint64]*User),
 		friends: make(map[uint64]map[uint64]bool),
 	}
@@ -59,10 +63,14 @@ func (m *MemStore) CreateUser(u *User) error {
 	if _, ok := m.users[u.Account]; ok {
 		return ErrAccountExists
 	}
+	if _, ok := m.byNick[u.Nickname]; ok {
+		return ErrNicknameExists
+	}
 	m.nextID++
 	u.ID = m.nextID
 	cp := *u
 	m.users[u.Account] = &cp
+	m.byNick[u.Nickname] = &cp
 	m.byID[u.ID] = &cp
 	return nil
 }
@@ -71,6 +79,17 @@ func (m *MemStore) GetUserByAccount(account string) (*User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u, ok := m.users[account]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *u
+	return &cp, nil
+}
+
+func (m *MemStore) GetUserByNickname(nickname string) (*User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.byNick[nickname]
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -145,13 +164,17 @@ func OpenMySQL(dsn string) (*MySQLStore, error) {
 func (m *MySQLStore) Close() error { return m.db.Close() }
 
 func (m *MySQLStore) CreateUser(u *User) error {
+	// 插前预检（精确区分 account/nickname 冲突；唯一约束兜底并发）
+	if _, err := m.GetUserByAccount(u.Account); err == nil {
+		return ErrAccountExists
+	}
+	if _, err := m.GetUserByNickname(u.Nickname); err == nil {
+		return ErrNicknameExists
+	}
 	res, err := m.db.Exec(
 		"INSERT INTO users (account, password_hash, nickname) VALUES (?,?,?)",
 		u.Account, u.PasswordHash, u.Nickname)
 	if err != nil {
-		if isDup(err) {
-			return ErrAccountExists
-		}
 		return err
 	}
 	id, _ := res.LastInsertId()
@@ -162,6 +185,11 @@ func (m *MySQLStore) CreateUser(u *User) error {
 func (m *MySQLStore) GetUserByAccount(account string) (*User, error) {
 	return m.scanRow(m.db.QueryRow(
 		"SELECT id, account, password_hash, nickname, equip_id FROM users WHERE account=?", account))
+}
+
+func (m *MySQLStore) GetUserByNickname(nickname string) (*User, error) {
+	return m.scanRow(m.db.QueryRow(
+		"SELECT id, account, password_hash, nickname, equip_id FROM users WHERE nickname=?", nickname))
 }
 
 func (m *MySQLStore) GetUserByID(id uint64) (*User, error) {
@@ -212,19 +240,4 @@ func (m *MySQLStore) scanRow(row *sql.Row) (*User, error) {
 		return nil, err
 	}
 	return &u, nil
-}
-
-func isDup(err error) bool {
-	// MySQL 1062 = duplicate entry
-	return err != nil && len(err.Error()) > 0 && err.Error()[:1] == "E" &&
-		contains(err.Error(), "1062")
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
