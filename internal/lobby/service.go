@@ -37,7 +37,7 @@ func NewService(s store.Store, secret string) *Service {
 }
 
 // Register 注册：账号唯一 + 昵称唯一（好友搜索凭据）+ 密码 bcrypt
-func (s *Service) Register(account, password, nickname string) (uint64, error) {
+func (s *Service) Register(account, password, nickname string) (uint32, error) {
 	if account == "" || len(account) > 64 || password == "" || nickname == "" || len(nickname) > 32 {
 		return 0, ErrBadInput
 	}
@@ -83,19 +83,19 @@ func (s *Service) Login(account, password string) (string, error) {
 }
 
 // Verify Token → uid（校验 HMAC 签名——防篡改）
-func (s *Service) Verify(token string) (uint64, error) {
+func (s *Service) Verify(token string) (uint32, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil || len(raw) != 16+sha256.Size {
+	if err != nil || len(raw) != 12+sha256.Size {
 		return 0, ErrBadToken
 	}
 	// HMAC 签名校验（篡改 uid/过期时间都会失配）
 	mac := hmac.New(sha256.New, s.secret)
-	mac.Write(raw[:16])
-	if !hmac.Equal(mac.Sum(nil), raw[16:]) {
+	mac.Write(raw[:12])
+	if !hmac.Equal(mac.Sum(nil), raw[12:]) {
 		return 0, ErrBadToken
 	}
-	uid := binary.BigEndian.Uint64(raw[0:8])
-	expire := int64(binary.BigEndian.Uint64(raw[8:16]))
+	uid := binary.BigEndian.Uint32(raw[0:4])
+	expire := int64(binary.BigEndian.Uint64(raw[4:12]))
 	if expire < time.Now().Unix() {
 		return 0, ErrBadToken
 	}
@@ -107,7 +107,7 @@ func (s *Service) Verify(token string) (uint64, error) {
 }
 
 // Nickname 昵称（会话展示）
-func (s *Service) Nickname(uid uint64) (string, error) {
+func (s *Service) Nickname(uid uint32) (string, error) {
 	u, err := s.store.GetUserByID(uid)
 	if err != nil {
 		return "", ErrBadAccount
@@ -116,7 +116,7 @@ func (s *Service) Nickname(uid uint64) (string, error) {
 }
 
 // EquipID 当前装备（进对局用）
-func (s *Service) EquipID(uid uint64) (int, error) {
+func (s *Service) EquipID(uid uint32) (int, error) {
 	u, err := s.store.GetUserByID(uid)
 	if err != nil {
 		return 0, ErrBadAccount
@@ -125,20 +125,20 @@ func (s *Service) EquipID(uid uint64) (int, error) {
 }
 
 // SetEquip 切换装备（T5 用——先留接口）
-func (s *Service) SetEquip(uid uint64, equip int) error {
+func (s *Service) SetEquip(uid uint32, equip int) error {
 	return s.store.SetEquip(uid, equip)
 }
 
-// sign HMAC 签名 Token：base64(uid(8) | expire(8) | hmac(16))
-func (s *Service) sign(uid uint64) (string, error) {
+// sign HMAC 签名 Token：base64(uid(4) | expire(8) | hmac(32))
+func (s *Service) sign(uid uint32) (string, error) {
 	expire := time.Now().Add(tokenTTL).Unix()
-	payload := make([]byte, 16)
-	binary.BigEndian.PutUint64(payload[0:8], uid)
-	binary.BigEndian.PutUint64(payload[8:16], uint64(expire))
+	payload := make([]byte, 12)
+	binary.BigEndian.PutUint32(payload[0:4], uid)
+	binary.BigEndian.PutUint64(payload[4:12], uint64(expire))
 	mac := hmac.New(sha256.New, s.secret)
 	mac.Write(payload)
-	out := make([]byte, 16+mac.Size())
+	out := make([]byte, 12+mac.Size())
 	copy(out, payload)
-	copy(out[16:], mac.Sum(nil))
+	copy(out[12:], mac.Sum(nil))
 	return base64.RawURLEncoding.EncodeToString(out), nil
 }

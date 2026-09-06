@@ -1,0 +1,5 @@
+{
+  "listen": ":7777",
+  "mysql_dsn": "root:your_password@tcp(127.0.0.1:3306)/lurkspire?parseTime=true",
+  "token_secret": "change-me-to-a-long-random-string"
+}

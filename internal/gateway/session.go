@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"lurkspire/server/internal/lobby"
 	"lurkspire/server/internal/protocol"
 	"lurkspire/server/internal/room"
 )
@@ -19,6 +20,11 @@ type Session struct {
 	hub  *Hub
 	UID  uint32
 	Room *room.Room // 当前房间（nil = 未入房）
+
+	// 登录态（M3：账号 uid + 昵称——未登录只能发登录/注册）
+	LoginUID uint32
+	Nickname string
+	LoggedIn bool
 
 	writeCh chan []byte // 写队列（广播/应答入队——写协程消费）
 	// 满队丢旧帧：状态广播 30Hz 可丢不可卡（慢客户端只慢自己）
@@ -100,34 +106,110 @@ func (s *Session) handle(f *protocol.Frame) {
 	switch f.MsgID {
 	case protocol.MsgHeartbeat:
 		s.Send(protocol.Encode(&protocol.Frame{MsgID: protocol.MsgHeartbeat, Seq: f.Seq}))
-	case protocol.MsgBattleJoin:
-		// body = 房间名（UTF8 字节串）
-		roomName := string(f.Body)
-		if roomName == "" {
-			s.sendError("empty room name")
+	case protocol.MsgReg:
+		s.handleReg(f.Body)
+	case protocol.MsgLogin:
+		s.handleLogin(f.Body)
+	default:
+		// 其余消息需登录态（M3 大厅/房间全部业务在登录后）
+		if !s.LoggedIn {
+			s.sendErr(protocol.LobbyErrToken, "请先登录")
 			return
 		}
+		s.handleAuthed(f.MsgID, f.Body)
+	}
+}
+
+// handleAuthed 已登录消息分发（大厅/房间/背包）
+func (s *Session) handleAuthed(msgID uint16, body []byte) {
+	switch msgID {
+	case protocol.MsgBattleJoin:
+		roomName := string(body)
+		if roomName == "" {
+			s.sendErr(protocol.LobbyErrBadInput, "empty room name")
+			return
+		}
+		// M3：房间玩家 = 账号 uid（登录后）
 		r, states, err := s.hub.Join(s, roomName)
 		if err != nil {
-			s.sendError(err.Error())
+			s.sendErr(protocol.LobbyErrRoomFull, err.Error())
 			return
 		}
-		// JoinOK：房间名 + 现有玩家状态
-		ok := protocol.EncodeJoinOK(r.ID(), s.UID, states)
+		ok := protocol.EncodeJoinOK(r.ID(), s.LoginUID, states)
 		s.Send(protocol.Encode(&protocol.Frame{MsgID: protocol.MsgBattleJoinOK, Body: ok}))
 	case protocol.MsgBattleInput:
 		if s.Room == nil {
 			return // 未入房不处理输入
 		}
-		s.Room.HandleInput(s.UID, protocol.DecodeInput(f.Body))
+		s.Room.HandleInput(s.LoginUID, protocol.DecodeInput(body))
+	case protocol.MsgRoomLeave:
+		s.hub.Leave(s)
+		s.Send(protocol.Encode(&protocol.Frame{MsgID: protocol.MsgRoomLeave}))
 	default:
-		// 未知消息忽略（不做攻击面）
+		// 大厅其他消息（好友/房间列表/背包）——T3-T5 实现
+		s.hub.HandleLobby(s, msgID, body)
 	}
 }
 
-func (s *Session) sendError(msg string) {
+// handleReg 注册（未登录可发）
+func (s *Session) handleReg(body []byte) {
+	account, password, nickname, ok := protocol.DecodeReg(body)
+	if !ok {
+		s.sendErr(protocol.LobbyErrBadInput, "bad register body")
+		return
+	}
+	uid, err := s.hub.Lobby().Register(account, password, nickname)
+	switch err {
+	case nil:
+		s.Send(protocol.Encode(&protocol.Frame{
+			MsgID: protocol.MsgRegResp, Body: protocol.EncodeRegResp(protocol.LobbyOK, uid)}))
+	case lobby.ErrAccountExists:
+		s.sendErr(protocol.LobbyErrAccount, "账号已存在")
+	case lobby.ErrNicknameExists:
+		s.sendErr(protocol.LobbyErrNickname, "昵称已被使用")
+	default:
+		s.sendErr(protocol.LobbyErrBadInput, "注册失败")
+	}
+}
+
+// handleLogin 登录（未登录可发）
+func (s *Session) handleLogin(body []byte) {
+	if s.LoggedIn {
+		s.sendErr(protocol.LobbyErrBadInput, "已登录")
+		return
+	}
+	account, password, ok := protocol.DecodeLogin(body)
+	if !ok {
+		s.sendErr(protocol.LobbyErrBadInput, "bad login body")
+		return
+	}
+	token, err := s.hub.Lobby().Login(account, password)
+	if err != nil {
+		switch err {
+		case lobby.ErrBadAccount:
+			s.sendErr(protocol.LobbyErrNoAccount, "账号不存在")
+		case lobby.ErrBadPassword:
+			s.sendErr(protocol.LobbyErrPassword, "密码错误")
+		default:
+			s.sendErr(protocol.LobbyErrBadInput, "登录失败")
+		}
+		return
+	}
+	// 登录成功：记录会话身份（uid/昵称）
+	uid, _ := s.hub.Lobby().Verify(token)
+	nick, _ := s.hub.Lobby().Nickname(uid)
+	s.LoginUID = uid
+	s.Nickname = nick
+	s.LoggedIn = true
 	s.Send(protocol.Encode(&protocol.Frame{
-		MsgID: protocol.MsgBattleErr,
-		Body:  []byte(msg),
+		MsgID: protocol.MsgLoginResp,
+		Body:  protocol.EncodeLoginResp(protocol.LobbyOK, token, uid, nick),
+	}))
+}
+
+func (s *Session) sendErr(errCode uint8, msg string) {
+	s.Send(protocol.Encode(&protocol.Frame{
+		MsgID: protocol.MsgLoginResp,
+		Body:  protocol.EncodeRegResp(errCode, 0),
 	}))
 }

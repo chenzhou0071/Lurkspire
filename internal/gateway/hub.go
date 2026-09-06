@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 
+	"lurkspire/server/internal/lobby"
 	"lurkspire/server/internal/protocol"
 	"lurkspire/server/internal/room"
 )
@@ -20,15 +21,28 @@ type Hub struct {
 	mu      sync.Mutex
 	seq     uint32
 	manager *room.Manager
+	lobby   *lobby.Service
 	// 房间 → 会话集合（广播路由用）
 	roomSessions map[*room.Room]map[uint32]*Session
 }
 
-func NewHub(m *room.Manager) *Hub {
+func NewHub(m *room.Manager, svc *lobby.Service) *Hub {
 	return &Hub{
 		manager:      m,
+		lobby:        svc,
 		roomSessions: make(map[*room.Room]map[uint32]*Session),
 	}
+}
+
+// Lobby 账号服务（会话处理登录/大厅业务用）
+func (h *Hub) Lobby() *lobby.Service { return h.lobby }
+
+// HandleLobby 大厅业务消息（好友/房间列表/背包）——T3-T5 逐个接入
+func (h *Hub) HandleLobby(s *Session, msgID uint16, body []byte) {
+	// 未实现的消息静默忽略（T3-T5 填充）
+	_ = msgID
+	_ = body
+	_ = s
 }
 
 // AllocUID 分配玩家 ID（M2 无登录——连接即分配）

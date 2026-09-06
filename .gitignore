@@ -1,0 +1,7 @@
+# 本地配置（含数据库凭据——不追踪；模板见 config.json.example）
+config.json
+
+# Go
+*.exe
+*.test
+*.out

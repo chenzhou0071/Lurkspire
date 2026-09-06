@@ -18,7 +18,7 @@ var (
 
 // User 账号记录
 type User struct {
-	ID           uint64
+	ID           uint32
 	Account      string
 	PasswordHash string
 	Nickname     string
@@ -27,33 +27,33 @@ type User struct {
 
 // Store 存储接口（MemStore 供测试；MySQLStore 生产）
 type Store interface {
-	CreateUser(u *User) error              // ErrAccountExists/ErrNicknameExists
+	CreateUser(u *User) error // ErrAccountExists/ErrNicknameExists
 	GetUserByAccount(account string) (*User, error)
 	GetUserByNickname(nickname string) (*User, error) // 好友按昵称搜索
-	GetUserByID(id uint64) (*User, error)
-	SetEquip(id uint64, equip int) error
+	GetUserByID(id uint32) (*User, error)
+	SetEquip(id uint32, equip int) error
 	// 好友（T3 用）
-	AddFriend(a, b uint64) error
-	FriendIDs(uid uint64) ([]uint64, error)
+	AddFriend(a, b uint32) error
+	FriendIDs(uid uint32) ([]uint32, error)
 }
 
 // ---- MemStore（测试/开发——重启丢）----
 
 type MemStore struct {
 	mu      sync.Mutex
-	nextID  uint64
+	nextID  uint32
 	users   map[string]*User // account → user
 	byNick  map[string]*User // nickname → user（唯一）
-	byID    map[uint64]*User
-	friends map[uint64]map[uint64]bool // uid → 好友集合
+	byID    map[uint32]*User
+	friends map[uint32]map[uint32]bool // uid → 好友集合
 }
 
 func NewMemStore() *MemStore {
 	return &MemStore{
 		users:   make(map[string]*User),
 		byNick:  make(map[string]*User),
-		byID:    make(map[uint64]*User),
-		friends: make(map[uint64]map[uint64]bool),
+		byID:    make(map[uint32]*User),
+		friends: make(map[uint32]map[uint32]bool),
 	}
 }
 
@@ -97,7 +97,7 @@ func (m *MemStore) GetUserByNickname(nickname string) (*User, error) {
 	return &cp, nil
 }
 
-func (m *MemStore) GetUserByID(id uint64) (*User, error) {
+func (m *MemStore) GetUserByID(id uint32) (*User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u, ok := m.byID[id]
@@ -108,7 +108,7 @@ func (m *MemStore) GetUserByID(id uint64) (*User, error) {
 	return &cp, nil
 }
 
-func (m *MemStore) SetEquip(id uint64, equip int) error {
+func (m *MemStore) SetEquip(id uint32, equip int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u, ok := m.byID[id]
@@ -119,24 +119,24 @@ func (m *MemStore) SetEquip(id uint64, equip int) error {
 	return nil
 }
 
-func (m *MemStore) AddFriend(a, b uint64) error {
+func (m *MemStore) AddFriend(a, b uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.friends[a] == nil {
-		m.friends[a] = make(map[uint64]bool)
+		m.friends[a] = make(map[uint32]bool)
 	}
 	if m.friends[b] == nil {
-		m.friends[b] = make(map[uint64]bool)
+		m.friends[b] = make(map[uint32]bool)
 	}
 	m.friends[a][b] = true
 	m.friends[b][a] = true
 	return nil
 }
 
-func (m *MemStore) FriendIDs(uid uint64) ([]uint64, error) {
+func (m *MemStore) FriendIDs(uid uint32) ([]uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []uint64
+	var out []uint32
 	for f := range m.friends[uid] {
 		out = append(out, f)
 	}
@@ -178,7 +178,7 @@ func (m *MySQLStore) CreateUser(u *User) error {
 		return err
 	}
 	id, _ := res.LastInsertId()
-	u.ID = uint64(id)
+	u.ID = uint32(id)
 	return nil
 }
 
@@ -192,17 +192,17 @@ func (m *MySQLStore) GetUserByNickname(nickname string) (*User, error) {
 		"SELECT id, account, password_hash, nickname, equip_id FROM users WHERE nickname=?", nickname))
 }
 
-func (m *MySQLStore) GetUserByID(id uint64) (*User, error) {
+func (m *MySQLStore) GetUserByID(id uint32) (*User, error) {
 	return m.scanRow(m.db.QueryRow(
 		"SELECT id, account, password_hash, nickname, equip_id FROM users WHERE id=?", id))
 }
 
-func (m *MySQLStore) SetEquip(id uint64, equip int) error {
+func (m *MySQLStore) SetEquip(id uint32, equip int) error {
 	_, err := m.db.Exec("UPDATE users SET equip_id=? WHERE id=?", equip, id)
 	return err
 }
 
-func (m *MySQLStore) AddFriend(a, b uint64) error {
+func (m *MySQLStore) AddFriend(a, b uint32) error {
 	lo, hi := a, b
 	if lo > hi {
 		lo, hi = hi, lo
@@ -212,16 +212,16 @@ func (m *MySQLStore) AddFriend(a, b uint64) error {
 	return err
 }
 
-func (m *MySQLStore) FriendIDs(uid uint64) ([]uint64, error) {
+func (m *MySQLStore) FriendIDs(uid uint32) ([]uint32, error) {
 	rows, err := m.db.Query(
 		"SELECT IF(user_a=?, user_b, user_a) FROM friends WHERE user_a=? OR user_b=?", uid, uid, uid)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []uint64
+	var out []uint32
 	for rows.Next() {
-		var f uint64
+		var f uint32
 		if err := rows.Scan(&f); err != nil {
 			return nil, err
 		}
