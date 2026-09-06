@@ -212,6 +212,14 @@ func EncodeOnlinePush(uid uint32, online bool) []byte {
 	return b
 }
 
+// DecodeOnlinePush body → uid/online
+func DecodeOnlinePush(b []byte) (uint32, bool) {
+	if len(b) < 5 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint32(b), b[4] == 1
+}
+
 // ---- 房间 ----
 
 type RoomInfo struct {

@@ -67,6 +67,16 @@ func (s *Service) SearchByNickname(nickname string) (*store.User, error) {
 	return u, nil
 }
 
+// AddFriend 建立双向好友关系（T3）
+func (s *Service) AddFriend(a, b uint32) error {
+	return s.store.AddFriend(a, b)
+}
+
+// FriendIDs 好友 uid 列表（T3）
+func (s *Service) FriendIDs(uid uint32) ([]uint32, error) {
+	return s.store.FriendIDs(uid)
+}
+
 // Login 登录：校验密码 → 发 Token（HMAC(uid|expire)）
 func (s *Service) Login(account, password string) (string, error) {
 	u, err := s.store.GetUserByAccount(account)

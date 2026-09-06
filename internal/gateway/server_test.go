@@ -58,14 +58,20 @@ func (c *client) join(t *testing.T, name string) *protocol.Frame {
 	if err := c.send(protocol.MsgBattleJoin, []byte(name)); err != nil {
 		t.Fatal(err)
 	}
-	f, err := c.recv(3 * time.Second)
-	if err != nil {
-		t.Fatal(err)
+	// 登录后可能有推送帧（好友列表等）——跳到 JoinOK
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c.conn.SetReadDeadline(deadline)
+		f, err := protocol.NewFrameReader(c.rd).Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.MsgID == protocol.MsgBattleJoinOK {
+			return f
+		}
 	}
-	if f.MsgID != protocol.MsgBattleJoinOK {
-		t.Fatalf("want JoinOK(301), got %d: %s", f.MsgID, f.Body)
-	}
-	return f
+	t.Fatal("join timeout")
+	return nil
 }
 
 // registerAndLogin 注册并登录（返回 loginResp）

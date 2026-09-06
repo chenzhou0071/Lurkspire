@@ -19,7 +19,9 @@ type Session struct {
 	fr   *protocol.FrameReader
 	hub  *Hub
 	UID  uint32
-	Room *room.Room // 当前房间（nil = 未入房）
+
+	roomMu sync.Mutex // 保护 Room 字段（Join 写 / Leave 清 / 输入读）
+	Room   *room.Room // 当前房间（nil = 未入房）
 
 	// 登录态（M3：账号 uid + 昵称——未登录只能发登录/注册）
 	LoginUID uint32
@@ -28,18 +30,41 @@ type Session struct {
 
 	writeCh chan []byte // 写队列（广播/应答入队——写协程消费）
 	// 满队丢旧帧：状态广播 30Hz 可丢不可卡（慢客户端只慢自己）
-	closed atomic.Bool
-	once   sync.Once
+	closed    atomic.Bool
+	closedCh  chan struct{} // 关闭通知（写协程退出——避免 close(writeCh) 与 Send 竞态）
+	once      sync.Once
+}
+
+// room 安全读当前房间
+func (s *Session) room() *room.Room {
+	s.roomMu.Lock()
+	defer s.roomMu.Unlock()
+	return s.Room
+}
+
+// setRoom 安全写房间（入房）
+func (s *Session) setRoom(r *room.Room) {
+	s.roomMu.Lock()
+	s.Room = r
+	s.roomMu.Unlock()
+}
+
+// clearRoom 安全清房间（出房）
+func (s *Session) clearRoom() {
+	s.roomMu.Lock()
+	s.Room = nil
+	s.roomMu.Unlock()
 }
 
 // NewSession 启动读+写双协程
 func NewSession(conn net.Conn, hub *Hub, uid uint32) *Session {
 	s := &Session{
-		conn:    conn,
-		fr:      protocol.NewFrameReader(conn),
-		hub:     hub,
-		UID:     uid,
-		writeCh: make(chan []byte, 128),
+		conn:     conn,
+		fr:       protocol.NewFrameReader(conn),
+		hub:      hub,
+		UID:      uid,
+		writeCh:  make(chan []byte, 128),
+		closedCh: make(chan struct{}),
 	}
 	go s.writeLoop() // 写协程：队列 → conn（阻塞只影响自己）
 	return s
@@ -62,10 +87,15 @@ func (s *Session) Serve() {
 
 // writeLoop 写协程：取队列 → 写 conn（慢客户端只卡自己的写协程）
 func (s *Session) writeLoop() {
-	for b := range s.writeCh {
-		if _, err := s.conn.Write(b); err != nil {
-			log.Printf("session %d write: %v", s.UID, err)
-			return // 写失败 = 连接坏 → 触发关闭
+	for {
+		select {
+		case b := <-s.writeCh:
+			if _, err := s.conn.Write(b); err != nil {
+				log.Printf("session %d write: %v", s.UID, err)
+				return // 写失败 = 连接坏 → 触发关闭
+			}
+		case <-s.closedCh:
+			return // 关闭通知：退出（writeCh 不 close——无 send 竞态）
 		}
 	}
 }
@@ -91,12 +121,12 @@ func (s *Session) Send(b []byte) {
 	}
 }
 
-// Close 关闭连接（幂等）：出房 + 断开
+// Close 关闭连接（幂等）：登出（出房+在线移除+好友离线推送） + 断开
 func (s *Session) Close() {
 	s.once.Do(func() {
 		s.closed.Store(true)
-		s.hub.Leave(s)
-		close(s.writeCh) // 写协程退出
+		close(s.closedCh) // 写协程退出（writeCh 保持开放——无 send/close 竞态）
+		s.hub.OnDisconnect(s)
 		s.conn.Close()
 	})
 }
@@ -138,7 +168,7 @@ func (s *Session) handleAuthed(msgID uint16, body []byte) {
 		ok := protocol.EncodeJoinOK(r.ID(), s.LoginUID, states)
 		s.Send(protocol.Encode(&protocol.Frame{MsgID: protocol.MsgBattleJoinOK, Body: ok}))
 	case protocol.MsgBattleInput:
-		if s.Room == nil {
+		if s.room() == nil {
 			return // 未入房不处理输入
 		}
 		s.Room.HandleInput(s.LoginUID, protocol.DecodeInput(body))
@@ -205,6 +235,7 @@ func (s *Session) handleLogin(body []byte) {
 		MsgID: protocol.MsgLoginResp,
 		Body:  protocol.EncodeLoginResp(protocol.LobbyOK, token, uid, nick),
 	}))
+	s.hub.OnLogin(s) // 好友系统：在线注册 + 上线推送 + 补发离线邀请 + 好友列表
 }
 
 func (s *Session) sendErr(errCode uint8, msg string) {
