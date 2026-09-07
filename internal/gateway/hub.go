@@ -26,6 +26,8 @@ type Hub struct {
 	roomSessions map[*room.Room]map[uint32]*Session
 	// 好友系统（T3：申请栏模式——申请持久化在 store，不在线也保留）
 	online map[uint32]*Session // 登录态 uid → 会话（在线表）
+	// 房间列表大厅（T4）
+	roomRegistry *rooms // 房间元信息（创建者/备注）
 }
 
 func NewHub(m *room.Manager, svc *lobby.Service) *Hub {
@@ -34,6 +36,7 @@ func NewHub(m *room.Manager, svc *lobby.Service) *Hub {
 		lobby:        svc,
 		roomSessions: make(map[*room.Room]map[uint32]*Session),
 		online:       make(map[uint32]*Session),
+		roomRegistry: newRooms(),
 	}
 }
 
@@ -52,6 +55,7 @@ func (h *Hub) OnLogin(s *Session) {
 	}
 	h.SendPendingList(s) // 申请栏：我的待处理申请（别人申请我——离线也保留）
 	h.SendFriendList(s)  // 好友列表
+	h.SendRoomList(s)    // 房间列表（大厅）
 }
 
 // OnDisconnect 连接断开：出房 + 在线移除 + 好友离线推送
@@ -128,7 +132,7 @@ func (h *Hub) SendFriendList(s *Session) {
 	}))
 }
 
-// HandleLobby 大厅业务消息（好友/房间列表/背包）——T3 好友，T4-T5 续
+// HandleLobby 大厅业务消息（好友/房间/背包）——T3 好友 T4 房间 T5 背包
 func (h *Hub) HandleLobby(s *Session, msgID uint16, body []byte) {
 	switch msgID {
 	case protocol.MsgFriendSearch:
@@ -141,7 +145,84 @@ func (h *Hub) HandleLobby(s *Session, msgID uint16, body []byte) {
 		h.handleFriendReject(s, body)
 	case protocol.MsgFriendList:
 		h.SendFriendList(s)
+	case protocol.MsgRoomList:
+		h.SendRoomList(s)
+	case protocol.MsgRoomCreate:
+		h.handleRoomCreate(s, body)
+	case protocol.MsgRoomJoin:
+		h.handleRoomJoin(s, body)
 	}
+}
+
+// ---- 房间列表大厅（T4） ----
+
+// sendJoinOK 入房成功应答（房间名 + 账号 uid + 现有玩家状态）——建房/加入/直连共用
+func (h *Hub) sendJoinOK(s *Session, r *room.Room) {
+	states := r.StateSnapshot()
+	s.Send(protocol.Encode(&protocol.Frame{
+		MsgID: protocol.MsgBattleJoinOK,
+		Body:  protocol.EncodeJoinOK(r.ID(), s.LoginUID, states),
+	}))
+}
+
+// 创建房间（同房名拒绝）：建房 + 注册元信息 + 自己入房 + 广播列表
+func (h *Hub) handleRoomCreate(s *Session, body []byte) {
+	if s.room() != nil {
+		s.sendErr(protocol.LobbyErrBadInput, "已在房间中")
+		return
+	}
+	name, note, ok := protocol.DecodeRoomOp(body)
+	if !ok || name == "" || len(name) > 32 || len(note) > 64 {
+		s.sendErr(protocol.LobbyErrBadInput, "房间名不合法")
+		return
+	}
+	if h.roomRegistry.has(name) {
+		s.sendErr(protocol.LobbyErrRoomExists, "房间名已存在")
+		return
+	}
+	meta := &RoomMeta{Name: name, Creator: s.LoginUID, Note: note}
+	if !h.roomRegistry.add(meta) {
+		s.sendErr(protocol.LobbyErrRoomExists, "房间名已存在")
+		return
+	}
+	// 入房（room.Manager 建房幂等——meta 已注册）
+	r, _, err := h.Join(s, name)
+	if err != nil {
+		h.roomRegistry.remove(name)
+		s.sendErr(protocol.LobbyErrRoomFull, err.Error())
+		return
+	}
+	h.sendJoinOK(s, r) // 建房成功 → 进对局
+	h.broadcastRoomList() // 列表变更广播
+}
+
+// 加入房间（不存在/满员拒绝）：入房 + 广播列表
+func (h *Hub) handleRoomJoin(s *Session, body []byte) {
+	if s.room() != nil {
+		s.sendErr(protocol.LobbyErrBadInput, "已在房间中")
+		return
+	}
+	name, _, ok := protocol.DecodeRoomOp(body)
+	if !ok || name == "" {
+		s.sendErr(protocol.LobbyErrBadInput, "bad join")
+		return
+	}
+	if !h.roomRegistry.has(name) {
+		s.sendErr(protocol.LobbyErrRoomMissing, "房间不存在")
+		return
+	}
+	r, _, err := h.Join(s, name)
+	if err != nil {
+		s.sendErr(protocol.LobbyErrRoomFull, "房间已满")
+		return
+	}
+	h.sendJoinOK(s, r) // 加入成功 → 进对局
+	h.broadcastRoomList() // 人数变化广播
+}
+
+// LeaveRoom 出房（MsgRoomLeave 用——Leave 内部处理空房销毁/meta/广播）
+func (h *Hub) LeaveRoom(s *Session) {
+	h.Leave(s)
 }
 
 // 好友搜索（按昵称——昵称唯一）
@@ -257,12 +338,13 @@ func (h *Hub) Join(s *Session, roomName string) (*room.Room, []protocol.PlayerSt
 	return r, r.StateSnapshot(), nil
 }
 
-// Leave 玩家离开：出房 + 注销路由
+// Leave 玩家离开：出房 + 空房销毁（同步元信息移除）
 func (h *Hub) Leave(s *Session) {
 	r := s.room()
 	if r == nil {
 		return
 	}
+	roomName := r.ID()
 	s.clearRoom()
 	r.RemovePlayer(s.LoginUID)
 	h.mu.Lock()
@@ -270,10 +352,12 @@ func (h *Hub) Leave(s *Session) {
 		delete(set, s.UID)
 		if len(set) == 0 {
 			delete(h.roomSessions, r)
-			h.manager.DestroyRoom(r.ID())
+			h.roomRegistry.remove(roomName) // 空房销毁：元信息同步移除
+			h.manager.DestroyRoom(roomName)
 		}
 	}
 	h.mu.Unlock()
+	h.broadcastRoomList() // 人数/列表变更广播
 }
 
 // broadcastToRoom 房间广播 → 房间内全部会话（Hub 内部：调用时已在房间 loop 内）

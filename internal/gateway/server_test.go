@@ -165,19 +165,38 @@ func TestGateway_TwoClientsJoinSameRoom(t *testing.T) {
 		t.Fatalf("joinok2 body too short: %d", len(f2.Body))
 	}
 
-	// c2 入房后应收到 c1 的状态广播（30Hz——含 c1）
-	f, err := c2.recv(3 * time.Second)
+	// c2 入房后应收到 c1 的状态广播（30Hz——含 c1；跳过 RoomList 广播）
+	f, err := c2.recvUntilMsg(protocol.MsgBattleState, 3*time.Second)
 	if err != nil {
 		t.Fatal("c2 no state broadcast")
-	}
-	if f.MsgID != protocol.MsgBattleState {
-		t.Fatalf("want state(320), got %d", f.MsgID)
 	}
 	states := protocol.DecodeState(f.Body)
 	if len(states) != 2 {
 		t.Fatalf("state should contain 2 players, got %+v", states)
 	}
 }
+
+// recvUntilMsg 读到指定消息（跳过其他帧——广播流里有 RoomList 等）
+func (c *client) recvUntilMsg(want uint16, timeout time.Duration) (*protocol.Frame, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		c.conn.SetReadDeadline(deadline)
+		f, err := protocol.NewFrameReader(c.rd).Next()
+		if err != nil {
+			return nil, err
+		}
+		if f.MsgID == want {
+			return f, nil
+		}
+	}
+	return nil, timeOutErr
+}
+
+var timeOutErr = &timeoutError{}
+
+type timeoutError struct{}
+
+func (e *timeoutError) Error() string { return "timeout" }
 
 func TestGateway_InputFlowsToRoom(t *testing.T) {
 	srv, _ := startTestGateway(t)
@@ -197,7 +216,7 @@ func TestGateway_InputFlowsToRoom(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	// c2 读广播直到拿到位置变化的 c1 或超时
+	// c2 读广播直到拿到位置变化的 c1 或超时（跳过 RoomList 等推送）
 	c2.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	rd := protocol.NewFrameReader(c2.rd)
 	found := false
@@ -244,8 +263,14 @@ func TestGateway_GracefulClose(t *testing.T) {
 	registerAndLogin(t, c, "u3", "pw", "玩家3")
 	c.join(t, "arena")
 	srv.Close() // 优雅关闭
-	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := c.recv(2 * time.Second); err == nil {
-		t.Fatal("connection should be closed after server shutdown")
+	// 消费缓冲后应读到 EOF/错误（连接被服务端关闭）
+	c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	rd := protocol.NewFrameReader(c.rd)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := rd.Next(); err != nil {
+			return // 读到错误 = 连接已关闭 ✓
+		}
 	}
+	t.Fatal("connection should be closed after server shutdown")
 }

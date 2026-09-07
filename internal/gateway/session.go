@@ -159,14 +159,18 @@ func (s *Session) handleAuthed(msgID uint16, body []byte) {
 			s.sendErr(protocol.LobbyErrBadInput, "empty room name")
 			return
 		}
-		// M3：房间玩家 = 账号 uid（登录后）
+		// 直连加入（M2 兼容）：不存在也建房
+		if !s.hub.roomRegistry.has(roomName) {
+			s.hub.roomRegistry.add(&RoomMeta{Name: roomName, Creator: s.LoginUID})
+		}
 		r, states, err := s.hub.Join(s, roomName)
 		if err != nil {
 			s.sendErr(protocol.LobbyErrRoomFull, err.Error())
 			return
 		}
-		ok := protocol.EncodeJoinOK(r.ID(), s.LoginUID, states)
-		s.Send(protocol.Encode(&protocol.Frame{MsgID: protocol.MsgBattleJoinOK, Body: ok}))
+		_ = states
+		s.hub.sendJoinOK(s, r)
+		s.hub.broadcastRoomList()
 	case protocol.MsgBattleInput:
 		if s.room() == nil {
 			return // 未入房不处理输入
