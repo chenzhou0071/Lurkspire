@@ -12,11 +12,12 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
--- 好友关系（双向：A-B 一条关系存两行，friend_a < friend_b 恒成立 + 各自方向视图查询）
+-- 好友关系（单向申请 + 双向生效：user_a 申请加 user_b；status 0=申请中 1=好友）
 CREATE TABLE IF NOT EXISTS friends (
     id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    user_a     INT UNSIGNED NOT NULL,           -- 小 id
-    user_b     INT UNSIGNED NOT NULL,           -- 大 id
+    user_a     INT UNSIGNED NOT NULL,            -- 申请人
+    user_b     INT UNSIGNED NOT NULL,            -- 被申请人
+    status     TINYINT      NOT NULL DEFAULT 0,  -- 0=申请中 1=好友
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_pair (user_a, user_b)
 ) ENGINE=InnoDB;

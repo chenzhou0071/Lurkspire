@@ -24,9 +24,8 @@ type Hub struct {
 	lobby   *lobby.Service
 	// 房间 → 会话集合（广播路由用）
 	roomSessions map[*room.Room]map[uint32]*Session
-	// 好友系统（T3）
-	online       map[uint32]*Session                // 登录态 uid → 会话（在线表）
-	pendingInv   map[uint32][]protocol.FriendInfo   // 离线邀请（目标登录时推送）
+	// 好友系统（T3：申请栏模式——申请持久化在 store，不在线也保留）
+	online map[uint32]*Session // 登录态 uid → 会话（在线表）
 }
 
 func NewHub(m *room.Manager, svc *lobby.Service) *Hub {
@@ -35,36 +34,24 @@ func NewHub(m *room.Manager, svc *lobby.Service) *Hub {
 		lobby:        svc,
 		roomSessions: make(map[*room.Room]map[uint32]*Session),
 		online:       make(map[uint32]*Session),
-		pendingInv:   make(map[uint32][]protocol.FriendInfo),
 	}
 }
 
 // Lobby 账号服务（会话处理登录/大厅业务用）
 func (h *Hub) Lobby() *lobby.Service { return h.lobby }
 
-// OnLogin 登录成功：注册在线 + 好友上线推送 + 补发离线邀请 + 下发好友列表
+// OnLogin 登录成功：注册在线 + 好友上线推送 + 下发申请栏（待处理申请）+ 好友列表
 func (h *Hub) OnLogin(s *Session) {
 	h.mu.Lock()
 	first := h.online[s.LoginUID] == nil
 	h.online[s.LoginUID] = s
-	// 取离线邀请（登录时补发）
-	var invites []protocol.FriendInfo
-	if v, ok := h.pendingInv[s.LoginUID]; ok {
-		invites = v
-		delete(h.pendingInv, s.LoginUID)
-	}
 	h.mu.Unlock()
 
 	if first {
 		h.broadcastOnline(s.LoginUID, true) // 好友看到我上线
 	}
-	for _, inv := range invites {
-		s.Send(protocol.Encode(&protocol.Frame{
-			MsgID: protocol.MsgFriendInviteN,
-			Body:  protocol.EncodeFriendInfo(inv.UID, inv.Nickname, false),
-		}))
-	}
-	h.SendFriendList(s)
+	h.SendPendingList(s) // 申请栏：我的待处理申请（别人申请我——离线也保留）
+	h.SendFriendList(s)  // 好友列表
 }
 
 // OnDisconnect 连接断开：出房 + 在线移除 + 好友离线推送
@@ -99,6 +86,26 @@ func (h *Hub) sessionOf(uid uint32) *Session {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.online[uid]
+}
+
+// SendPendingList 下发申请栏（别人申请我、未处理的——uid/昵称/在线）
+func (h *Hub) SendPendingList(s *Session) {
+	pending, err := h.lobby.PendingFriendIDs(s.LoginUID)
+	if err != nil {
+		return
+	}
+	list := make([]protocol.FriendInfo, 0, len(pending))
+	for _, p := range pending {
+		nick, err := h.lobby.Nickname(p)
+		if err != nil {
+			continue
+		}
+		list = append(list, protocol.FriendInfo{UID: p, Nickname: nick, Online: h.sessionOf(p) != nil})
+	}
+	s.Send(protocol.Encode(&protocol.Frame{
+		MsgID: protocol.MsgFriendPendingList,
+		Body:  protocol.EncodeFriendList(list),
+	}))
 }
 
 // SendFriendList 下发某用户的好友列表（uid/昵称/在线）
@@ -159,7 +166,7 @@ func (h *Hub) handleFriendSearch(s *Session, body []byte) {
 	}))
 }
 
-// 发邀请（目标在线 → 推送；离线 → 排队待登录补发）
+// 发申请（落库持久——目标在线实时推送加栏；离线登录时申请栏带出）
 func (h *Hub) handleFriendInvite(s *Session, body []byte) {
 	target, ok := protocol.DecodeUID(body)
 	if !ok || target == s.LoginUID {
@@ -174,76 +181,45 @@ func (h *Hub) handleFriendInvite(s *Session, body []byte) {
 			return
 		}
 	}
-	// 自己昵称（邀请方）
-	myNick, _ := h.lobby.Nickname(s.LoginUID)
-	info := protocol.FriendInfo{UID: s.LoginUID, Nickname: myNick, Online: true}
-	if ts := h.sessionOf(target); ts != nil {
-		ts.Send(protocol.Encode(&protocol.Frame{
-			MsgID: protocol.MsgFriendInviteN,
-			Body:  protocol.EncodeFriendInfo(info.UID, info.Nickname, true),
-		}))
+	if err := h.lobby.InviteFriend(s.LoginUID, target); err != nil {
+		s.sendErr(protocol.LobbyErrBadInput, "申请失败")
 		return
 	}
-	// 离线：排队（对方登录时推送）
-	h.mu.Lock()
-	h.pendingInv[target] = append(h.pendingInv[target], info)
-	h.mu.Unlock()
+	// 目标在线 → 实时推送申请条目（加栏）
+	if ts := h.sessionOf(target); ts != nil {
+		myNick, _ := h.lobby.Nickname(s.LoginUID)
+		ts.Send(protocol.Encode(&protocol.Frame{
+			MsgID: protocol.MsgFriendInviteN,
+			Body:  protocol.EncodeFriendInfo(s.LoginUID, myNick, true),
+		}))
+	}
+	// 离线：无需操作——申请已落库，目标登录时 SendPendingList 带出
 }
 
-// 同意：建双向关系 + 双方刷新列表
+// 同意：状态转好友 + 双方刷新列表（申请条目由客户端移除）
 func (h *Hub) handleFriendAccept(s *Session, body []byte) {
 	other, ok := protocol.DecodeUID(body)
 	if !ok {
 		s.sendErr(protocol.LobbyErrBadInput, "bad accept")
 		return
 	}
-	if err := h.lobby.AddFriend(s.LoginUID, other); err != nil {
-		s.sendErr(protocol.LobbyErrBadInput, "add friend failed")
+	if err := h.lobby.AcceptFriend(s.LoginUID, other); err != nil {
+		s.sendErr(protocol.LobbyErrBadInput, "accept failed")
 		return
 	}
-	// 清 pending（对方邀请行）
-	h.mu.Lock()
-	if v, ok := h.pendingInv[s.LoginUID]; ok {
-		filtered := v[:0]
-		for _, inv := range v {
-			if inv.UID != other {
-				filtered = append(filtered, inv)
-			}
-		}
-		if len(filtered) == 0 {
-			delete(h.pendingInv, s.LoginUID)
-		} else {
-			h.pendingInv[s.LoginUID] = filtered
-		}
-	}
-	h.mu.Unlock()
-	h.SendFriendList(s)                       // 我刷新
+	h.SendFriendList(s) // 我刷新（申请栏条目客户端本地移除）
 	if os := h.sessionOf(other); os != nil {
-		h.SendFriendList(os)                  // 对方刷新
+		h.SendFriendList(os) // 对方刷新
 	}
 }
 
-// 拒绝：仅清 pending（不建关系）
+// 拒绝：删除申请（条目消失）
 func (h *Hub) handleFriendReject(s *Session, body []byte) {
 	other, ok := protocol.DecodeUID(body)
 	if !ok {
 		return
 	}
-	h.mu.Lock()
-	if v, ok := h.pendingInv[s.LoginUID]; ok {
-		filtered := v[:0]
-		for _, inv := range v {
-			if inv.UID != other {
-				filtered = append(filtered, inv)
-			}
-		}
-		if len(filtered) == 0 {
-			delete(h.pendingInv, s.LoginUID)
-		} else {
-			h.pendingInv[s.LoginUID] = filtered
-		}
-	}
-	h.mu.Unlock()
+	h.lobby.RejectFriend(s.LoginUID, other)
 }
 
 // AllocUID 分配玩家 ID（M2 无登录——连接即分配）

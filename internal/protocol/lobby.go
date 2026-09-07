@@ -19,6 +19,7 @@ const (
 	MsgFriendAccept   = 214 // 同意邀请（目标 uid）
 	MsgFriendReject   = 215 // 拒绝邀请（目标 uid）
 	MsgFriendList     = 216 // 好友列表（uid/昵称/在线）——登录/变更后推送
+	MsgFriendPendingList = 218 // 申请栏（我的待处理申请——登录下发）
 	MsgFriendOnline   = 217 // 在线状态推送（uid/在线）
 	MsgRoomList       = 220 // 房间列表快照
 	MsgRoomCreate     = 221 // 创建房间（name+note）

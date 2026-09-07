@@ -32,20 +32,24 @@ type Store interface {
 	GetUserByNickname(nickname string) (*User, error) // 好友按昵称搜索
 	GetUserByID(id uint32) (*User, error)
 	SetEquip(id uint32, equip int) error
-	// 好友（T3 用）
-	AddFriend(a, b uint32) error
-	FriendIDs(uid uint32) ([]uint32, error)
+	// 好友（单向申请 + 双向生效——申请栏模式）
+	InviteFriend(a, b uint32) error                // a 申请加 b（重复申请幂等）
+	PendingFriendIDs(uid uint32) ([]uint32, error) // 我的待处理申请（别人申请我）
+	AcceptFriend(uid, other uint32) error          // 我同意 other 的申请
+	RejectFriend(uid, other uint32) error          // 我拒绝 other 的申请
+	FriendIDs(uid uint32) ([]uint32, error)        // 好友（status=1 双向可见）
 }
 
 // ---- MemStore（测试/开发——重启丢）----
 
 type MemStore struct {
-	mu      sync.Mutex
-	nextID  uint32
-	users   map[string]*User // account → user
-	byNick  map[string]*User // nickname → user（唯一）
-	byID    map[uint32]*User
-	friends map[uint32]map[uint32]bool // uid → 好友集合
+	mu     sync.Mutex
+	nextID uint32
+	users  map[string]*User // account → user
+	byNick map[string]*User // nickname → user（唯一）
+	byID   map[uint32]*User
+	// 好友关系：key = "a,b" → status（0 申请中/1 好友）
+	friends map[string]int
 }
 
 func NewMemStore() *MemStore {
@@ -53,7 +57,7 @@ func NewMemStore() *MemStore {
 		users:   make(map[string]*User),
 		byNick:  make(map[string]*User),
 		byID:    make(map[uint32]*User),
-		friends: make(map[uint32]map[uint32]bool),
+		friends: make(map[string]int),
 	}
 }
 
@@ -119,17 +123,54 @@ func (m *MemStore) SetEquip(id uint32, equip int) error {
 	return nil
 }
 
-func (m *MemStore) AddFriend(a, b uint32) error {
+func fkey(a, b uint32) string { return fmt.Sprintf("%d,%d", a, b) }
+
+// InviteFriend a 申请 b（幂等：已有关系/申请不覆盖）
+func (m *MemStore) InviteFriend(a, b uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.friends[a] == nil {
-		m.friends[a] = make(map[uint32]bool)
+	key := fkey(a, b)
+	if _, ok := m.friends[key]; ok {
+		return nil // 已有（申请中或好友）——幂等
 	}
-	if m.friends[b] == nil {
-		m.friends[b] = make(map[uint32]bool)
+	m.friends[key] = 0
+	return nil
+}
+
+// PendingFriendIDs 待处理申请（别人申请我 status=0）
+func (m *MemStore) PendingFriendIDs(uid uint32) ([]uint32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []uint32
+	for key, status := range m.friends {
+		if status != 0 {
+			continue
+		}
+		var a, b uint32
+		fmt.Sscanf(key, "%d,%d", &a, &b)
+		if b == uid {
+			out = append(out, a)
+		}
 	}
-	m.friends[a][b] = true
-	m.friends[b][a] = true
+	return out, nil
+}
+
+// AcceptFriend 我同意 other 的申请
+func (m *MemStore) AcceptFriend(uid, other uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := fkey(other, uid)
+	if _, ok := m.friends[key]; ok {
+		m.friends[key] = 1
+	}
+	return nil
+}
+
+// RejectFriend 我拒绝 other 的申请
+func (m *MemStore) RejectFriend(uid, other uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.friends, fkey(other, uid))
 	return nil
 }
 
@@ -137,8 +178,17 @@ func (m *MemStore) FriendIDs(uid uint32) ([]uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []uint32
-	for f := range m.friends[uid] {
-		out = append(out, f)
+	for key, status := range m.friends {
+		if status != 1 {
+			continue
+		}
+		var a, b uint32
+		fmt.Sscanf(key, "%d,%d", &a, &b)
+		if a == uid {
+			out = append(out, b)
+		} else if b == uid {
+			out = append(out, a)
+		}
 	}
 	return out, nil
 }
@@ -202,19 +252,46 @@ func (m *MySQLStore) SetEquip(id uint32, equip int) error {
 	return err
 }
 
-func (m *MySQLStore) AddFriend(a, b uint32) error {
-	lo, hi := a, b
-	if lo > hi {
-		lo, hi = hi, lo
-	}
+func (m *MySQLStore) InviteFriend(a, b uint32) error {
 	_, err := m.db.Exec(
-		"INSERT IGNORE INTO friends (user_a, user_b) VALUES (?,?)", lo, hi)
+		"INSERT IGNORE INTO friends (user_a, user_b, status) VALUES (?,?,0)", a, b)
+	return err
+}
+
+func (m *MySQLStore) PendingFriendIDs(uid uint32) ([]uint32, error) {
+	rows, err := m.db.Query(
+		"SELECT user_a FROM friends WHERE user_b=? AND status=0", uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uint32
+	for rows.Next() {
+		var f uint32
+		if err := rows.Scan(&f); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func (m *MySQLStore) AcceptFriend(uid, other uint32) error {
+	_, err := m.db.Exec(
+		"UPDATE friends SET status=1 WHERE user_a=? AND user_b=? AND status=0", other, uid)
+	return err
+}
+
+func (m *MySQLStore) RejectFriend(uid, other uint32) error {
+	_, err := m.db.Exec(
+		"DELETE FROM friends WHERE user_a=? AND user_b=? AND status=0", other, uid)
 	return err
 }
 
 func (m *MySQLStore) FriendIDs(uid uint32) ([]uint32, error) {
 	rows, err := m.db.Query(
-		"SELECT IF(user_a=?, user_b, user_a) FROM friends WHERE user_a=? OR user_b=?", uid, uid, uid)
+		"SELECT IF(user_a=?, user_b, user_a) FROM friends WHERE status=1 AND (user_a=? OR user_b=?)",
+		uid, uid, uid)
 	if err != nil {
 		return nil, err
 	}

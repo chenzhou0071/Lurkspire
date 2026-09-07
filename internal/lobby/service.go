@@ -67,12 +67,27 @@ func (s *Service) SearchByNickname(nickname string) (*store.User, error) {
 	return u, nil
 }
 
-// AddFriend 建立双向好友关系（T3）
-func (s *Service) AddFriend(a, b uint32) error {
-	return s.store.AddFriend(a, b)
+// InviteFriend a 申请加 b（申请栏模式——持久化待处理）
+func (s *Service) InviteFriend(a, b uint32) error {
+	return s.store.InviteFriend(a, b)
 }
 
-// FriendIDs 好友 uid 列表（T3）
+// PendingFriendIDs 我的待处理申请
+func (s *Service) PendingFriendIDs(uid uint32) ([]uint32, error) {
+	return s.store.PendingFriendIDs(uid)
+}
+
+// AcceptFriend 同意申请（双向好友）
+func (s *Service) AcceptFriend(uid, other uint32) error {
+	return s.store.AcceptFriend(uid, other)
+}
+
+// RejectFriend 拒绝申请
+func (s *Service) RejectFriend(uid, other uint32) error {
+	return s.store.RejectFriend(uid, other)
+}
+
+// FriendIDs 好友 uid 列表（双向生效）
 func (s *Service) FriendIDs(uid uint32) ([]uint32, error) {
 	return s.store.FriendIDs(uid)
 }

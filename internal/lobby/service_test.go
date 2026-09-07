@@ -113,12 +113,34 @@ func TestFriends_MemStore(t *testing.T) {
 	b := &store.User{Account: "b", PasswordHash: "x", Nickname: "B"}
 	st.CreateUser(a)
 	st.CreateUser(b)
-	if err := st.AddFriend(a.ID, b.ID); err != nil {
+	// a 申请 b → b 的申请栏有 a（好友还没有）
+	if err := st.InviteFriend(a.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := st.PendingFriendIDs(b.ID)
+	if len(pending) != 1 || pending[0] != a.ID {
+		t.Fatalf("pending list wrong: %v", pending)
+	}
+	if fa, _ := st.FriendIDs(a.ID); len(fa) != 0 {
+		t.Fatalf("not friend yet: %v", fa)
+	}
+	// b 同意 → 双向好友
+	if err := st.AcceptFriend(b.ID, a.ID); err != nil {
 		t.Fatal(err)
 	}
 	fa, _ := st.FriendIDs(a.ID)
 	fb, _ := st.FriendIDs(b.ID)
 	if len(fa) != 1 || fa[0] != b.ID || len(fb) != 1 || fb[0] != a.ID {
 		t.Fatalf("friend bidirectional broken: a=%v b=%v", fa, fb)
+	}
+	// b 拒绝后 a 的申请消失（新申请 c→b 拒绝）
+	c := &store.User{Account: "c", PasswordHash: "x", Nickname: "C"}
+	st.CreateUser(c)
+	st.InviteFriend(c.ID, b.ID)
+	if err := st.RejectFriend(b.ID, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if p2, _ := st.PendingFriendIDs(b.ID); len(p2) != 0 {
+		t.Fatalf("rejected pending should vanish: %v", p2)
 	}
 }

@@ -146,12 +146,26 @@ func TestFriend_OfflineInvite_DeliveredOnLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// C 重新登录 → 应收到离线邀请推送
+	// C 重新登录 → 申请栏应带出 A 的申请（持久化——离线不丢）
 	c := dial(t, srv)
 	loginOnly(t, c, "fc", "pw")
-	inv := recvUntil(t, c, protocol.MsgFriendInviteN, 3*time.Second)
-	invFi, ok := protocol.DecodeFriendInfo(inv.Body)
-	if !ok || invFi.Nickname != "好友甲2" {
-		t.Fatalf("offline invite wrong: %+v ok=%v", invFi, ok)
+	pending := recvUntil(t, c, protocol.MsgFriendPendingList, 3*time.Second)
+	pList, _ := protocol.DecodeFriendList(pending.Body)
+	if len(pList) != 1 || pList[0].Nickname != "好友甲2" {
+		t.Fatalf("pending list on login wrong: %+v", pList)
+	}
+	// B(我) 拒绝 → 申请消失（再收 PendingList 为空）
+	if err := c.send(protocol.MsgFriendReject, protocol.EncodeUID(pList[0].UID)); err != nil {
+		t.Fatal(err)
+	}
+	// 发送方（A）在申请后无列表变化——接受方删条目由客户端本地做；
+	// 服务端验证：重登后 PendingList 为空
+	c.conn.Close()
+	c2 := dial(t, srv)
+	loginOnly(t, c2, "fc", "pw")
+	pending2 := recvUntil(t, c2, protocol.MsgFriendPendingList, 3*time.Second)
+	p2List, _ := protocol.DecodeFriendList(pending2.Body)
+	if len(p2List) != 0 {
+		t.Fatalf("after reject pending should be empty: %+v", p2List)
 	}
 }
