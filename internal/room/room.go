@@ -30,6 +30,7 @@ type Player struct {
 	Weapon         uint8
 	Alt            uint8
 	Block          float32
+	BlockMax       float32 // 格挡上限（默认 100——装备 4 → 110）
 	Anim           uint8
 	LastReportTick int64 // 最后上报帧（超时判定用）
 	Suspicious     int   // 非法移动次数（踢出候选）
@@ -69,10 +70,16 @@ func (p *Player) Snapshot() protocol.PlayerState {
 // ---- 房间 ----
 
 type inputMsg struct {
-	uid  uint32
-	in   protocol.InputReport
-	snap chan []protocol.PlayerState // 非 nil = 快照请求（复用输入 channel 串行化）
+	uid   uint32
+	in    protocol.InputReport
+	snap  chan []protocol.PlayerState // 非 nil = 快照请求（复用输入 channel 串行化）
 	drain chan []protocol.HitEvent   // 非 nil = 事件取走请求
+}
+
+type equipMsg struct {
+	uid    uint32
+	equip  int
+	result chan error
 }
 
 type joinMsg struct {
@@ -94,6 +101,7 @@ type Room struct {
 	inputCh chan inputMsg
 	joinCh  chan joinMsg
 	leaveCh chan leaveMsg
+	equipCh chan equipMsg
 	brCh    chan func(msgID uint16, body []byte)
 
 	tick          int64
@@ -119,6 +127,7 @@ func NewRoom(id string, cfg Config) *Room {
 		inputCh: make(chan inputMsg, 64),
 		joinCh:  make(chan joinMsg),
 		leaveCh: make(chan leaveMsg),
+		equipCh: make(chan equipMsg, 8),
 		brCh:    make(chan func(msgID uint16, body []byte), 4),
 	}
 	r.combat = NewCombat(r.players, MapWalls)
@@ -191,6 +200,8 @@ func (r *Room) loop() {
 			m.result <- r.addPlayer(m.uid)
 		case m := <-r.leaveCh:
 			delete(r.players, m.uid)
+		case m := <-r.equipCh:
+			m.result <- r.applyEquip(m.uid, m.equip)
 		case fn := <-r.brCh:
 			r.onBroadcast = fn
 		}
@@ -252,8 +263,30 @@ func (r *Room) addPlayer(uid uint32) error {
 	}
 	// 出生点：随机出生位（含高层平台——复活不贴脸）
 	sp := PickSpawn()
-	r.players[uid] = &Player{UID: uid, HP: 100, Block: 100,
+	r.players[uid] = &Player{UID: uid, HP: 100, Block: 100, BlockMax: 100,
 		X: sp.X, Y: sp.Y, Z: sp.Z, LastReportTick: r.tick, FirstReport: true}
+	return nil
+}
+
+// SetPlayerEquip 应用玩家装备（进房/换装后——装备 4 提升格挡上限）
+func (r *Room) SetPlayerEquip(uid uint32, equip int) error {
+	ch := make(chan error, 1)
+	r.equipCh <- equipMsg{uid: uid, equip: equip, result: ch}
+	return <-ch
+}
+
+// applyEquip 装备生效（loop 内）：装备 4（守护徽章）→ 格挡上限 110，条按上限重置
+func (r *Room) applyEquip(uid uint32, equip int) error {
+	p := r.players[uid]
+	if p == nil {
+		return nil // 未在房（进房前换装——进房时再应用）
+	}
+	if equip == 4 {
+		p.BlockMax = 110 // 格挡 +10（装备 4）
+	} else {
+		p.BlockMax = 100
+	}
+	p.Block = p.BlockMax // 条按上限满格（开局/换装即时生效）
 	return nil
 }
 

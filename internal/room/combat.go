@@ -318,13 +318,13 @@ func (c *Combat) TickCombat() {
 				p.LockCharges++
 			}
 		}
-		// 死亡重生：倒计时结束复活（满血回随机出生点——防守尸）
+		// 死亡重生：倒计时结束复活（满血回随机出生点——防守尸；格挡按装备上限）
 		if p.DeadTicks > 0 {
 			p.DeadTicks--
 			if p.DeadTicks == 0 {
 				sp := PickSpawn()
 				p.HP = 100
-				p.Block = 100
+				p.Block = p.BlockMax // 装备上限（默认 100/装备 4 → 110）
 				p.X, p.Y, p.Z = sp.X, sp.Y, sp.Z
 				p.FirstReport = true // 复活后首帧跳过位移校验（传送）
 			}

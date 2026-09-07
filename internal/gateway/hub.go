@@ -151,7 +151,40 @@ func (h *Hub) HandleLobby(s *Session, msgID uint16, body []byte) {
 		h.handleRoomCreate(s, body)
 	case protocol.MsgRoomJoin:
 		h.handleRoomJoin(s, body)
+	case protocol.MsgBagList:
+		h.SendBagList(s)
+	case protocol.MsgBagEquip:
+		h.handleBagEquip(s, body)
 	}
+}
+
+// ---- 背包（T5） ----
+
+// SendBagList 下发背包（当前装备 + 物品表）
+func (h *Hub) SendBagList(s *Session) {
+	cur, _ := h.lobby.EquipID(s.LoginUID)
+	s.Send(protocol.Encode(&protocol.Frame{
+		MsgID: protocol.MsgBagList,
+		Body:  protocol.EncodeBagList(cur, protocol.BagItems),
+	}))
+}
+
+// 切换装备（0-4 合法——只能一件；持久化 + 若在房立即生效）
+func (h *Hub) handleBagEquip(s *Session, body []byte) {
+	equip, ok := protocol.DecodeBagEquip(body)
+	if !ok || equip < 0 || equip >= len(protocol.BagItems) {
+		s.sendErr(protocol.LobbyErrEquip, "非法装备")
+		return
+	}
+	if err := h.lobby.SetEquip(s.LoginUID, equip); err != nil {
+		s.sendErr(protocol.LobbyErrBadInput, "装备失败")
+		return
+	}
+	// 若在房间 → 立即应用（格挡上限）
+	if r := s.room(); r != nil {
+		r.SetPlayerEquip(s.LoginUID, equip)
+	}
+	h.SendBagList(s)
 }
 
 // ---- 房间列表大厅（T4） ----
@@ -335,6 +368,10 @@ func (h *Hub) Join(s *Session, roomName string) (*room.Room, []protocol.PlayerSt
 	h.roomSessions[r][s.UID] = s
 	h.mu.Unlock()
 	s.setRoom(r) // 安全写房间（与 Leave/输入并发安全）
+	// 应用玩家装备（装备 4 → 格挡上限 110——房间权威）
+	if eid, err := h.lobby.EquipID(s.LoginUID); err == nil {
+		r.SetPlayerEquip(s.LoginUID, eid)
+	}
 	return r, r.StateSnapshot(), nil
 }
 
