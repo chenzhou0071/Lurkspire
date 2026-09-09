@@ -6,7 +6,7 @@ import (
 	"math"
 )
 
-func mathFloat32bits(f float32) uint32 { return math.Float32bits(f) }
+func mathFloat32bits(f float32) uint32     { return math.Float32bits(f) }
 func mathFloat32frombits(b uint32) float32 { return math.Float32frombits(b) }
 
 // ---- 结构体定义 ----
@@ -18,12 +18,12 @@ type PlayerState struct {
 	X, Y, Z float32
 	Yaw     float32
 	HP      uint8
-	Weapon  uint8 // 0=枪 1=刀
-	Alt     uint8 // 交替枪号（表现用）
+	Weapon  uint8   // 0=枪 1=刀
+	Alt     uint8   // 交替枪号（表现用）
 	Block   float32 // 格挡条
-	Anim    uint8 // 动画状态（跑墙/滑铲/空中等）
-	Score   uint16 // 击杀数（计分板）
-	Deaths  uint16 // 死亡数（计分板）
+	Anim    uint8   // 动画状态（跑墙/滑铲/空中等）
+	Score   uint16  // 击杀数（计分板）
+	Deaths  uint16  // 死亡数（计分板）
 }
 
 // InputReport 客户端输入上报（移动/位置/瞄准/按钮/武器/动作）
@@ -43,14 +43,14 @@ type InputReport struct {
 }
 
 const (
-	BtnFire     uint8 = 1 << 0
-	BtnSword    uint8 = 1 << 1
-	BtnBlock    uint8 = 1 << 2
-	BtnSlide    uint8 = 1 << 3
-	BtnJump     uint8 = 1 << 4
-	BtnDashAtk  uint8 = 1 << 5
-	BtnWallRun  uint8 = 1 << 6 // 跑墙中（服务端按跑墙速度积分——速度仍服务端权威）
-	BtnLock     uint8 = 1 << 7 // 锁头发射（充能消耗服务端记账）
+	BtnFire    uint8 = 1 << 0
+	BtnSword   uint8 = 1 << 1
+	BtnBlock   uint8 = 1 << 2
+	BtnSlide   uint8 = 1 << 3
+	BtnJump    uint8 = 1 << 4
+	BtnDashAtk uint8 = 1 << 5
+	BtnWallRun uint8 = 1 << 6 // 跑墙中（服务端按跑墙速度积分——速度仍服务端权威）
+	BtnLock    uint8 = 1 << 7 // 锁头发射（充能消耗服务端记账）
 )
 
 // HitEvent 命中通知（服务端 → 客户端表现用）
@@ -72,13 +72,13 @@ const (
 
 // 动作码（客户端上报——服务端广播给他人显示）
 const (
-	AnimGround     = 0
-	AnimWallLeft   = 1 // 跑墙中（墙在右——身体左倾）
-	AnimWallRight  = 2 // 跑墙中（墙在左——身体右倾）
-	AnimSlide      = 3
-	AnimAir        = 4
-	AnimSwing      = 5 // 挥砍中
-	AnimDash       = 6 // 冲刺斩中
+	AnimGround    = 0
+	AnimWallLeft  = 1 // 跑墙中（墙在右——身体左倾）
+	AnimWallRight = 2 // 跑墙中（墙在左——身体右倾）
+	AnimSlide     = 3
+	AnimAir       = 4
+	AnimSwing     = 5 // 挥砍中
+	AnimDash      = 6 // 冲刺斩中
 )
 
 // EncodeState 玩家列表 → 字节流（count u8 + N×36）
@@ -244,4 +244,25 @@ func EncodeJoinOK(roomName string, selfUID uint32, states []PlayerState) []byte 
 	binary.BigEndian.PutUint32(tmp[:], selfUID)
 	b = append(b, tmp[:]...)
 	return append(b, EncodeState(states)...)
+}
+
+// EncodePlayerInfo 房间玩家昵称：uid(4) + 昵称(u16 len + utf8)——Tab 击杀栏昵称表
+func EncodePlayerInfo(uid uint32, nickname string) []byte {
+	b := make([]byte, 4+2+len(nickname))
+	binary.BigEndian.PutUint32(b, uid)
+	putStr(b, 4, nickname)
+	return b
+}
+
+// DecodePlayerInfo body → uid/昵称（短数据返回 false）
+func DecodePlayerInfo(b []byte) (uint32, string, bool) {
+	if len(b) < 4 {
+		return 0, "", false
+	}
+	uid := binary.BigEndian.Uint32(b)
+	nick, _, ok := getStr(b, 4)
+	if !ok {
+		return 0, "", false
+	}
+	return uid, nick, true
 }

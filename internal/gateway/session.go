@@ -30,9 +30,9 @@ type Session struct {
 
 	writeCh chan []byte // 写队列（广播/应答入队——写协程消费）
 	// 满队丢旧帧：状态广播 30Hz 可丢不可卡（慢客户端只慢自己）
-	closed    atomic.Bool
-	closedCh  chan struct{} // 关闭通知（写协程退出——避免 close(writeCh) 与 Send 竞态）
-	once      sync.Once
+	closed   atomic.Bool
+	closedCh chan struct{} // 关闭通知（写协程退出——避免 close(writeCh) 与 Send 竞态）
+	once     sync.Once
 }
 
 // room 安全读当前房间

@@ -42,15 +42,15 @@ func TestEncodeState_GoldenBytes(t *testing.T) {
 	}
 	b := EncodeState(states)
 	want := []byte{
-		0x01, // count=1
+		0x01,                   // count=1
 		0x00, 0x00, 0x00, 0x01, // uid=1
 		0x3F, 0x80, 0x00, 0x00, // x=1.0
 		0x40, 0x00, 0x00, 0x00, // y=2.0
 		0x40, 0x40, 0x00, 0x00, // z=3.0
 		0x40, 0x80, 0x00, 0x00, // yaw=4.0
-		0x64, // hp=100
-		0x00, // weapon=0
-		0x01, // alt=1
+		0x64,                   // hp=100
+		0x00,                   // weapon=0
+		0x01,                   // alt=1
 		0x42, 0xB4, 0x00, 0x00, // block=90.0
 		0x00,       // anim=0
 		0x00, 0x07, // score=7
@@ -74,5 +74,15 @@ func TestEncodeSettle_RoundTrip(t *testing.T) {
 	got := DecodeSettle(EncodeSettle(entries))
 	if len(got) != 3 || got[0] != entries[0] || got[2] != entries[2] {
 		t.Fatalf("settle roundtrip mismatch:\n got %+v\nwant %+v", got, entries)
+	}
+}
+
+func TestPlayerInfo_RoundTrip(t *testing.T) {
+	uid, nick, ok := DecodePlayerInfo(EncodePlayerInfo(42, "玩家四十二"))
+	if !ok || uid != 42 || nick != "玩家四十二" {
+		t.Fatalf("playerinfo roundtrip: uid=%d nick=%s ok=%v", uid, nick, ok)
+	}
+	if _, _, ok := DecodePlayerInfo([]byte{0x01}); ok {
+		t.Fatal("short data should fail")
 	}
 }

@@ -12,12 +12,13 @@ const (
 
 // ---- 战斗（300-349）----
 const (
-	MsgBattleJoin   = 300 // 入房（登录后——房间名）
-	MsgBattleJoinOK = 301 // 入房成功（玩家列表）
-	MsgBattleInput  = 310 // 客户端输入/移动上报
-	MsgBattleState  = 320 // 服务端状态广播（位置/朝向/血量/武器）
-	MsgBattleHit    = 330 // 命中通知（客户端表现用）
-	MsgBattleDeath  = 331 // 死亡/击杀广播
-	MsgBattleSettle = 340 // 结算（保留协议——无限对局不使用）
-	MsgBattleErr    = 349 // 战斗错误
+	MsgBattleJoin       = 300 // 入房（登录后——房间名）
+	MsgBattleJoinOK     = 301 // 入房成功（玩家列表）
+	MsgBattleInput      = 310 // 客户端输入/移动上报
+	MsgBattleState      = 320 // 服务端状态广播（位置/朝向/血量/武器）
+	MsgBattleHit        = 330 // 命中通知（客户端表现用）
+	MsgBattleDeath      = 331 // 死亡/击杀广播
+	MsgBattlePlayerInfo = 335 // 房间玩家昵称（uid+昵称——入房时同步，Tab 击杀栏显示）
+	MsgBattleSettle     = 340 // 结算（保留协议——无限对局不使用）
+	MsgBattleErr        = 349 // 战斗错误
 )

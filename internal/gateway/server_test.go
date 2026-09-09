@@ -274,3 +274,55 @@ func TestGateway_GracefulClose(t *testing.T) {
 	}
 	t.Fatal("connection should be closed after server shutdown")
 }
+
+// 昵称同步：后加入者入房时——房内老人收到新人昵称、新人收到老人昵称
+func TestGateway_PlayerNameSync(t *testing.T) {
+	srv, _ := startTestGateway(t)
+	c1 := dial(t, srv)
+	registerAndLogin(t, c1, "ns1", "pw", "昵称甲")
+	c1.join(t, "arena") // 房内只有自己——无昵称帧
+
+	// c2 加入（不用 join helper——它跳帧会丢掉自己的 335）
+	c2 := dial(t, srv)
+	registerAndLogin(t, c2, "ns2", "pw", "昵称乙")
+	if err := c2.send(protocol.MsgBattleJoin, []byte("arena")); err != nil {
+		t.Fatal(err)
+	}
+	// c2 先收到 c1 昵称（syncRoomNames 在 JoinOK 前执行），再收 JoinOK
+	f2 := recvUntil(t, c2, protocol.MsgBattlePlayerInfo, 2*time.Second)
+	uid2, nick2, ok2 := protocol.DecodePlayerInfo(f2.Body)
+	if !ok2 || uid2 != 1 || nick2 != "昵称甲" {
+		t.Fatalf("c2 playerinfo wrong: uid=%d nick=%s ok=%v", uid2, nick2, ok2)
+	}
+	recvUntil(t, c2, protocol.MsgBattleJoinOK, 2*time.Second)
+	// c1 收到 c2 昵称
+	f1 := recvUntil(t, c1, protocol.MsgBattlePlayerInfo, 2*time.Second)
+	uid1, nick1, ok1 := protocol.DecodePlayerInfo(f1.Body)
+	if !ok1 || uid1 != 2 || nick1 != "昵称乙" {
+		t.Fatalf("c1 playerinfo wrong: uid=%d nick=%s ok=%v", uid1, nick1, ok1)
+	}
+
+	// 第三人：c1/c2 都应收到 c3 昵称；c3 收全量两条
+	c3 := dial(t, srv)
+	registerAndLogin(t, c3, "ns3", "pw", "昵称丙")
+	if err := c3.send(protocol.MsgBattleJoin, []byte("arena")); err != nil {
+		t.Fatal(err)
+	}
+	got3a := recvUntil(t, c1, protocol.MsgBattlePlayerInfo, 2*time.Second)
+	_, nick3a, _ := protocol.DecodePlayerInfo(got3a.Body)
+	got3b := recvUntil(t, c2, protocol.MsgBattlePlayerInfo, 2*time.Second)
+	_, nick3b, _ := protocol.DecodePlayerInfo(got3b.Body)
+	if nick3a != "昵称丙" || nick3b != "昵称丙" {
+		t.Fatalf("c3 nick sync wrong: a=%s b=%s", nick3a, nick3b)
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		f := recvUntil(t, c3, protocol.MsgBattlePlayerInfo, 2*time.Second)
+		_, nick, _ := protocol.DecodePlayerInfo(f.Body)
+		seen[nick] = true
+	}
+	if !seen["昵称甲"] || !seen["昵称乙"] {
+		t.Fatalf("c3 full list wrong: %v", seen)
+	}
+	recvUntil(t, c3, protocol.MsgBattleJoinOK, 2*time.Second)
+}

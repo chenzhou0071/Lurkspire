@@ -225,7 +225,7 @@ func (h *Hub) handleRoomCreate(s *Session, body []byte) {
 		s.sendErr(protocol.LobbyErrRoomFull, err.Error())
 		return
 	}
-	h.sendJoinOK(s, r) // 建房成功 → 进对局
+	h.sendJoinOK(s, r)    // 建房成功 → 进对局
 	h.broadcastRoomList() // 列表变更广播
 }
 
@@ -249,7 +249,7 @@ func (h *Hub) handleRoomJoin(s *Session, body []byte) {
 		s.sendErr(protocol.LobbyErrRoomFull, "房间已满")
 		return
 	}
-	h.sendJoinOK(s, r) // 加入成功 → 进对局
+	h.sendJoinOK(s, r)    // 加入成功 → 进对局
 	h.broadcastRoomList() // 人数变化广播
 }
 
@@ -372,7 +372,36 @@ func (h *Hub) Join(s *Session, roomName string) (*room.Room, []protocol.PlayerSt
 	if eid, err := h.lobby.EquipID(s.LoginUID); err == nil {
 		r.SetPlayerEquip(s.LoginUID, eid)
 	}
+	h.syncRoomNames(r, s) // 昵称同步：新玩家收全量；房内老人收新人昵称
 	return r, r.StateSnapshot(), nil
+}
+
+// syncRoomNames 房间玩家昵称同步（Tab 击杀栏显示昵称——State 不带昵称保持 36B）
+func (h *Hub) syncRoomNames(r *room.Room, joiner *Session) {
+	var others []*Session
+	h.mu.Lock()
+	for _, s := range h.roomSessions[r] {
+		if s != joiner {
+			others = append(others, s)
+		}
+	}
+	h.mu.Unlock()
+	// 新加入者：补发房内已有玩家昵称（全量——自己昵称客户端已有）
+	for _, o := range others {
+		if nick, err := h.lobby.Nickname(o.LoginUID); err == nil {
+			joiner.Send(protocol.Encode(&protocol.Frame{
+				MsgID: protocol.MsgBattlePlayerInfo,
+				Body:  protocol.EncodePlayerInfo(o.LoginUID, nick),
+			}))
+		}
+	}
+	// 房内已有玩家：广播新玩家昵称
+	if nick, err := h.lobby.Nickname(joiner.LoginUID); err == nil {
+		body := protocol.EncodePlayerInfo(joiner.LoginUID, nick)
+		for _, o := range others {
+			o.Send(protocol.Encode(&protocol.Frame{MsgID: protocol.MsgBattlePlayerInfo, Body: body}))
+		}
+	}
 }
 
 // Leave 玩家离开：出房 + 空房销毁（同步元信息移除）

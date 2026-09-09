@@ -8,25 +8,25 @@ import (
 
 // ---- 大厅消息号（200-299）----
 const (
-	MsgLogin          = 200 // 登录（account+password）
-	MsgLoginResp      = 201 // 登录应答（errCode/token/uid/nickname）
-	MsgReg            = 202 // 注册（account+password+nickname）
-	MsgRegResp        = 203 // 注册应答（errCode/uid）
-	MsgFriendSearch   = 210 // 按昵称搜索
-	MsgFriendSearchR  = 211 // 搜索结果（目标 uid/昵称/是否已好友）
-	MsgFriendInvite   = 212 // 发邀请（目标 uid）
-	MsgFriendInviteN  = 213 // 收到邀请推送（邀请方 uid/昵称）
-	MsgFriendAccept   = 214 // 同意邀请（目标 uid）
-	MsgFriendReject   = 215 // 拒绝邀请（目标 uid）
-	MsgFriendList     = 216 // 好友列表（uid/昵称/在线）——登录/变更后推送
+	MsgLogin             = 200 // 登录（account+password）
+	MsgLoginResp         = 201 // 登录应答（errCode/token/uid/nickname）
+	MsgReg               = 202 // 注册（account+password+nickname）
+	MsgRegResp           = 203 // 注册应答（errCode/uid）
+	MsgFriendSearch      = 210 // 按昵称搜索
+	MsgFriendSearchR     = 211 // 搜索结果（目标 uid/昵称/是否已好友）
+	MsgFriendInvite      = 212 // 发邀请（目标 uid）
+	MsgFriendInviteN     = 213 // 收到邀请推送（邀请方 uid/昵称）
+	MsgFriendAccept      = 214 // 同意邀请（目标 uid）
+	MsgFriendReject      = 215 // 拒绝邀请（目标 uid）
+	MsgFriendList        = 216 // 好友列表（uid/昵称/在线）——登录/变更后推送
 	MsgFriendPendingList = 218 // 申请栏（我的待处理申请——登录下发）
-	MsgFriendOnline   = 217 // 在线状态推送（uid/在线）
-	MsgRoomList       = 220 // 房间列表快照
-	MsgRoomCreate     = 221 // 创建房间（name+note）
-	MsgRoomJoin       = 222 // 加入房间（name）
-	MsgRoomLeave      = 223 // 离开房间
-	MsgBagList        = 230 // 背包列表（当前装备）
-	MsgBagEquip       = 231 // 切换装备（equipID）
+	MsgFriendOnline      = 217 // 在线状态推送（uid/在线）
+	MsgRoomList          = 220 // 房间列表快照
+	MsgRoomCreate        = 221 // 创建房间（name+note）
+	MsgRoomJoin          = 222 // 加入房间（name）
+	MsgRoomLeave         = 223 // 离开房间
+	MsgBagList           = 230 // 背包列表（当前装备）
+	MsgBagEquip          = 231 // 切换装备（equipID）
 )
 
 // ---- 大厅错误码 ----
