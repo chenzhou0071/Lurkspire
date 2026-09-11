@@ -25,6 +25,15 @@ type User struct {
 	EquipID      int
 }
 
+// Equipment 装备定义（equipments 表——名称/描述/效果；两端展示与生效数据源）
+type Equipment struct {
+	ID          int
+	Name        string
+	Description string
+	EffectType  string  // none/air_jump/run_speed/magazine/block_max
+	EffectValue float32 // 效果数值（+0.3/+1/+4/+10）
+}
+
 // Store 存储接口（MemStore 供测试；MySQLStore 生产）
 type Store interface {
 	CreateUser(u *User) error // ErrAccountExists/ErrNicknameExists
@@ -32,6 +41,9 @@ type Store interface {
 	GetUserByNickname(nickname string) (*User, error) // 好友按昵称搜索
 	GetUserByID(id uint32) (*User, error)
 	SetEquip(id uint32, equip int) error
+	// 装备目录（equipments 表）
+	ListEquipments() ([]Equipment, error)    // 全部上架装备（含 id0 无，按 sort_order）
+	GetEquipment(id int) (*Equipment, error) // 单件（ErrNotFound）
 	// 好友（单向申请 + 双向生效——申请栏模式）
 	InviteFriend(a, b uint32) error                // a 申请加 b（重复申请幂等）
 	PendingFriendIDs(uid uint32) ([]uint32, error) // 我的待处理申请（别人申请我）
@@ -50,6 +62,8 @@ type MemStore struct {
 	byID   map[uint32]*User
 	// 好友关系：key = "a,b" → status（0 申请中/1 好友）
 	friends map[string]int
+	// 装备目录（种子与 db/schema.sql 一致——测试无需 MySQL）
+	equipments map[int]*Equipment
 }
 
 func NewMemStore() *MemStore {
@@ -58,6 +72,13 @@ func NewMemStore() *MemStore {
 		byNick:  make(map[string]*User),
 		byID:    make(map[uint32]*User),
 		friends: make(map[string]int),
+		equipments: map[int]*Equipment{
+			0: {0, "无", "不装备任何物品", "", 0},
+			1: {1, "轻盈之靴", "二段跳高度 +0.3m", "air_jump", 0.3},
+			2: {2, "疾风护腕", "跑步速度 +1", "run_speed", 1},
+			3: {3, "扩容弹匣", "弹夹子弹 +4", "magazine", 4},
+			4: {4, "守护徽章", "格挡条上限 +10", "block_max", 10},
+		},
 	}
 }
 
@@ -193,6 +214,31 @@ func (m *MemStore) FriendIDs(uid uint32) ([]uint32, error) {
 	return out, nil
 }
 
+// ---- 装备目录（Mem——种子与 db/schema.sql 一致）----
+
+func (m *MemStore) ListEquipments() ([]Equipment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Equipment, 0, len(m.equipments))
+	for i := 0; i < len(m.equipments); i++ { // id 升序（= sort_order）
+		if e, ok := m.equipments[i]; ok {
+			out = append(out, *e)
+		}
+	}
+	return out, nil
+}
+
+func (m *MemStore) GetEquipment(id int) (*Equipment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.equipments[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *e
+	return &cp, nil
+}
+
 // ---- MySQLStore（生产）----
 
 type MySQLStore struct {
@@ -250,6 +296,40 @@ func (m *MySQLStore) GetUserByID(id uint32) (*User, error) {
 func (m *MySQLStore) SetEquip(id uint32, equip int) error {
 	_, err := m.db.Exec("UPDATE users SET equip_id=? WHERE id=?", equip, id)
 	return err
+}
+
+// ListEquipments 装备目录（equipments 表——上架按 sort_order）
+func (m *MySQLStore) ListEquipments() ([]Equipment, error) {
+	rows, err := m.db.Query(
+		"SELECT id, name, description, effect_type, effect_value FROM equipments WHERE enabled=1 ORDER BY sort_order, id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Equipment
+	for rows.Next() {
+		var e Equipment
+		if err := rows.Scan(&e.ID, &e.Name, &e.Description, &e.EffectType, &e.EffectValue); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// GetEquipment 单件装备（含未上架——合法性校验用）
+func (m *MySQLStore) GetEquipment(id int) (*Equipment, error) {
+	var e Equipment
+	err := m.db.QueryRow(
+		"SELECT id, name, description, effect_type, effect_value FROM equipments WHERE id=?", id).
+		Scan(&e.ID, &e.Name, &e.Description, &e.EffectType, &e.EffectValue)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &e, nil
 }
 
 func (m *MySQLStore) InviteFriend(a, b uint32) error {

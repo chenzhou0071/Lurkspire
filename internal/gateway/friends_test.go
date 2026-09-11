@@ -158,6 +158,8 @@ func TestFriend_OfflineInvite_DeliveredOnLogin(t *testing.T) {
 	if err := c.send(protocol.MsgFriendReject, protocol.EncodeUID(pList[0].UID)); err != nil {
 		t.Fatal(err)
 	}
+	// 等 Reject 落库处理完再断开（服务端无应答——防止断连早于处理）
+	time.Sleep(300 * time.Millisecond)
 	// 发送方（A）在申请后无列表变化——接受方删条目由客户端本地做；
 	// 服务端验证：重登后 PendingList 为空
 	c.conn.Close()

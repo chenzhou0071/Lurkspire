@@ -56,6 +56,7 @@ func (h *Hub) OnLogin(s *Session) {
 	h.SendPendingList(s) // 申请栏：我的待处理申请（别人申请我——离线也保留）
 	h.SendFriendList(s)  // 好友列表
 	h.SendRoomList(s)    // 房间列表（大厅）
+	h.SendBagList(s)     // 背包装备（进对局前应用——跑步/二段跳/弹夹/格挡）
 }
 
 // OnDisconnect 连接断开：出房 + 在线移除 + 好友离线推送
@@ -160,19 +161,39 @@ func (h *Hub) HandleLobby(s *Session, msgID uint16, body []byte) {
 
 // ---- 背包（T5） ----
 
-// SendBagList 下发背包（当前装备 + 物品表）
+// SendBagList 下发背包（当前装备 + 装备目录——equipments 表；查询失败用内置兜底表）
 func (h *Hub) SendBagList(s *Session) {
 	cur, _ := h.lobby.EquipID(s.LoginUID)
+	items := protocol.BagItems // 兜底（DB 不可用时也保证界面可用）
+	if list, err := h.lobby.Equipments(); err == nil && len(list) > 0 {
+		items = make([]protocol.BagItem, 0, len(list))
+		for _, e := range list {
+			items = append(items, protocol.BagItem{ID: e.ID, Name: e.Name, Desc: e.Description})
+		}
+	}
 	s.Send(protocol.Encode(&protocol.Frame{
 		MsgID: protocol.MsgBagList,
-		Body:  protocol.EncodeBagList(cur, protocol.BagItems),
+		Body:  protocol.EncodeBagList(cur, items),
 	}))
 }
 
-// 切换装备（0-4 合法——只能一件；持久化 + 若在房立即生效）
+// blockBonus 装备的格挡加成（equipments 表 effect：block_max → +effect_value）
+func (h *Hub) blockBonus(equipID int) float32 {
+	e, err := h.lobby.Equipment(equipID)
+	if err != nil || e.EffectType != "block_max" {
+		return 0
+	}
+	return e.EffectValue
+}
+
+// 切换装备（合法性查表——只能一件；持久化 + 若在房立即生效）
 func (h *Hub) handleBagEquip(s *Session, body []byte) {
 	equip, ok := protocol.DecodeBagEquip(body)
-	if !ok || equip < 0 || equip >= len(protocol.BagItems) {
+	if !ok {
+		s.sendErr(protocol.LobbyErrEquip, "非法装备")
+		return
+	}
+	if _, err := h.lobby.Equipment(equip); err != nil { // 装备必须存在于目录
 		s.sendErr(protocol.LobbyErrEquip, "非法装备")
 		return
 	}
@@ -180,9 +201,9 @@ func (h *Hub) handleBagEquip(s *Session, body []byte) {
 		s.sendErr(protocol.LobbyErrBadInput, "装备失败")
 		return
 	}
-	// 若在房间 → 立即应用（格挡上限）
+	// 若在房间 → 立即应用（格挡上限——按表效果值）
 	if r := s.room(); r != nil {
-		r.SetPlayerEquip(s.LoginUID, equip)
+		r.SetPlayerEquip(s.LoginUID, h.blockBonus(equip))
 	}
 	h.SendBagList(s)
 }
@@ -368,9 +389,9 @@ func (h *Hub) Join(s *Session, roomName string) (*room.Room, []protocol.PlayerSt
 	h.roomSessions[r][s.UID] = s
 	h.mu.Unlock()
 	s.setRoom(r) // 安全写房间（与 Leave/输入并发安全）
-	// 应用玩家装备（装备 4 → 格挡上限 110——房间权威）
+	// 应用玩家装备（格挡上限——equipments 表 block_max 效果值；房间权威）
 	if eid, err := h.lobby.EquipID(s.LoginUID); err == nil {
-		r.SetPlayerEquip(s.LoginUID, eid)
+		r.SetPlayerEquip(s.LoginUID, h.blockBonus(eid))
 	}
 	h.syncRoomNames(r, s) // 昵称同步：新玩家收全量；房内老人收新人昵称
 	return r, r.StateSnapshot(), nil

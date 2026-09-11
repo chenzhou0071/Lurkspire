@@ -16,6 +16,7 @@ func TestBag_ListAndEquip(t *testing.T) {
 	c := dial(t, srv)
 	registerAndLogin(t, c, "ba1", "pw", "背包甲")
 	recvUntil(t, c, protocol.MsgFriendList, 2*time.Second) // 登录推送排空
+	recvUntil(t, c, protocol.MsgBagList, 2*time.Second)    // 排掉登录推送的初始 BagList
 
 	// 请求背包列表
 	if err := c.send(protocol.MsgBagList, nil); err != nil {
@@ -104,4 +105,19 @@ func TestBag_Equip4_RaisesBlockMaxInRoom(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("equip4 block max not applied in room")
+}
+
+// 登录即下发背包（装备进对局前已同步——客户端 ApplyEquip）
+func TestBag_OnLogin_Pushed(t *testing.T) {
+	srv, _ := startTestGateway(t)
+	c := dial(t, srv)
+	registerAndLogin(t, c, "baglo", "pw", "登录包")
+	f := recvUntil(t, c, protocol.MsgBagList, 3*time.Second)
+	cur := f.Body[0]
+	if cur != 0 {
+		t.Fatalf("initial equip: want 0, got %d", cur)
+	}
+	if len(f.Body) < 2 || int(f.Body[1]) != 5 {
+		t.Fatalf("bag items: want 5, got %v", f.Body)
+	}
 }

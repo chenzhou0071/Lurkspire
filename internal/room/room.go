@@ -73,13 +73,13 @@ type inputMsg struct {
 	uid   uint32
 	in    protocol.InputReport
 	snap  chan []protocol.PlayerState // 非 nil = 快照请求（复用输入 channel 串行化）
-	drain chan []protocol.HitEvent   // 非 nil = 事件取走请求
+	drain chan []protocol.HitEvent    // 非 nil = 事件取走请求
 }
 
 type equipMsg struct {
-	uid    uint32
-	equip  int
-	result chan error
+	uid        uint32
+	blockBonus float32 // 格挡加成（equipments 表 block_max 效果值）
+	result     chan error
 }
 
 type joinMsg struct {
@@ -201,7 +201,7 @@ func (r *Room) loop() {
 		case m := <-r.leaveCh:
 			delete(r.players, m.uid)
 		case m := <-r.equipCh:
-			m.result <- r.applyEquip(m.uid, m.equip)
+			m.result <- r.applyEquip(m.uid, m.blockBonus)
 		case fn := <-r.brCh:
 			r.onBroadcast = fn
 		}
@@ -263,29 +263,28 @@ func (r *Room) addPlayer(uid uint32) error {
 	}
 	// 出生点：随机出生位（含高层平台——复活不贴脸）
 	sp := PickSpawn()
-	r.players[uid] = &Player{UID: uid, HP: 100, Block: 100, BlockMax: 100,
+	r.players[uid] = &Player{UID: uid, HP: 100, Block: BaseBlockMax, BlockMax: BaseBlockMax,
 		X: sp.X, Y: sp.Y, Z: sp.Z, LastReportTick: r.tick, FirstReport: true}
 	return nil
 }
 
-// SetPlayerEquip 应用玩家装备（进房/换装后——装备 4 提升格挡上限）
-func (r *Room) SetPlayerEquip(uid uint32, equip int) error {
+// SetPlayerEquip 应用玩家装备格挡加成（进房/换装后——值由 hub 从 equipments 表计算）
+func (r *Room) SetPlayerEquip(uid uint32, blockBonus float32) error {
 	ch := make(chan error, 1)
-	r.equipCh <- equipMsg{uid: uid, equip: equip, result: ch}
+	r.equipCh <- equipMsg{uid: uid, blockBonus: blockBonus, result: ch}
 	return <-ch
 }
 
-// applyEquip 装备生效（loop 内）：装备 4（守护徽章）→ 格挡上限 110，条按上限重置
-func (r *Room) applyEquip(uid uint32, equip int) error {
+// BaseBlockMax 格挡上限基准（装备 block_max 效果在此之上叠加）
+const BaseBlockMax float32 = 100
+
+// applyEquip 装备生效（loop 内）：格挡上限 = 基准 + 装备加成，条按上限重置
+func (r *Room) applyEquip(uid uint32, blockBonus float32) error {
 	p := r.players[uid]
 	if p == nil {
 		return nil // 未在房（进房前换装——进房时再应用）
 	}
-	if equip == 4 {
-		p.BlockMax = 110 // 格挡 +10（装备 4）
-	} else {
-		p.BlockMax = 100
-	}
+	p.BlockMax = BaseBlockMax + blockBonus
 	p.Block = p.BlockMax // 条按上限满格（开局/换装即时生效）
 	return nil
 }

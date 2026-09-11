@@ -11,12 +11,12 @@ import (
 
 // 广播收集器（记录 msgID → 次数/内容）
 type collector struct {
-	mu    sync.Mutex
-	state int
-	hits  int
-	death int
+	mu     sync.Mutex
+	state  int
+	hits   int
+	death  int
 	settle int
-	last  map[uint16][][]byte
+	last   map[uint16][][]byte
 }
 
 func newCollector() *collector {

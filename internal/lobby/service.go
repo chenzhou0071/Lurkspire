@@ -67,6 +67,16 @@ func (s *Service) SearchByNickname(nickname string) (*store.User, error) {
 	return u, nil
 }
 
+// Equipments 装备目录（equipments 表——下发/校验用）
+func (s *Service) Equipments() ([]store.Equipment, error) {
+	return s.store.ListEquipments()
+}
+
+// Equipment 单件装备（合法性校验）
+func (s *Service) Equipment(id int) (*store.Equipment, error) {
+	return s.store.GetEquipment(id)
+}
+
 // InviteFriend a 申请加 b（申请栏模式——持久化待处理）
 func (s *Service) InviteFriend(a, b uint32) error {
 	return s.store.InviteFriend(a, b)

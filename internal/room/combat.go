@@ -11,24 +11,24 @@ import (
 // 战斗常量（对齐客户端 GameConfig：枪 25/40m、刀 50/3m、冲刺 6m、
 // 锁头 50、格挡减半-10、重生 2s、射速 0.12s）
 const (
-	GunDamage           = 25
-	GunRange      int32 = 40
-	SwordDamage         = 50
-	SwordRange    int32 = 3
-	SwordArcDeg         = 60.0 // 挥砍扇形半角（度）
-	DashDamage          = 50
-	DashRange     int32 = 6
-	DashArcDeg          = 30.0 // 冲刺路径半角（度）
-	LockDamage          = 50
-	LockRange     int32 = 60
-	LockMaxCharges      = 3
-	LockChargeSeconds   = 10.0
-	CombatBlockMin      = 10.0 // 格挡条 <10 不触发格挡
-	BlockCost           = 10.0
-	BlockDamageMult     = 0.5
-	RespawnTicks        = 60 // 重生 2 秒（30Hz）
-	FireCooldownTicks   = 4  // 射速 0.12s（30Hz≈4 tick）
-	PlayerRadius        = 1.0 // 玩家碰撞球半径（中心 y+1——覆盖整个人 0-2m）
+	GunDamage               = 25
+	GunRange          int32 = 40
+	SwordDamage             = 50
+	SwordRange        int32 = 3
+	SwordArcDeg             = 60.0 // 挥砍扇形半角（度）
+	DashDamage              = 50
+	DashRange         int32 = 6
+	DashArcDeg              = 30.0 // 冲刺路径半角（度）
+	LockDamage              = 50
+	LockRange         int32 = 60
+	LockMaxCharges          = 3
+	LockChargeSeconds       = 10.0
+	CombatBlockMin          = 10.0 // 格挡条 <10 不触发格挡
+	BlockCost               = 10.0
+	BlockDamageMult         = 0.5
+	RespawnTicks            = 60  // 重生 2 秒（30Hz）
+	FireCooldownTicks       = 4   // 射速 0.12s（30Hz≈4 tick）
+	PlayerRadius            = 1.0 // 玩家碰撞球半径（中心 y+1——覆盖整个人 0-2m）
 )
 
 // Combat 战斗结算器（持房间玩家表 + 地图墙盒——单写者内使用）
@@ -192,7 +192,7 @@ func (c *Combat) ApplySword(shooter *Player) []protocol.HitEvent {
 	if shooter.Dead() || shooter.SwordCd > 0 {
 		return nil
 	}
-	shooter.SwordCd = 8 // 0.25s（30Hz）
+	shooter.SwordCd = 8                                 // 0.25s（30Hz）
 	_, _, dz := shooter.AimX, shooter.AimY, shooter.Yaw // 面向：用 Yaw 简化扇形朝向
 	_ = dz
 	events := []protocol.HitEvent{}
@@ -276,7 +276,7 @@ func (c *Combat) ApplyLock(shooter *Player) []protocol.HitEvent {
 		if p == shooter || p.Dead() {
 			continue
 		}
-		ex, ey, ez := p.X-shooter.X, (p.Y + 1) - shooter.Y, p.Z-shooter.Z
+		ex, ey, ez := p.X-shooter.X, (p.Y+1)-shooter.Y, p.Z-shooter.Z
 		d := float32(math.Sqrt(float64(ex*ex + ey*ey + ez*ez)))
 		if d <= float32(LockRange) && d < bestDist {
 			// 方向夹角过滤（准星锥形）
