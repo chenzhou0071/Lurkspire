@@ -1,0 +1,10 @@
+# ---- 预编译部署（无构建网络依赖——本地交叉编译后打包）----
+# 用法（Windows 本地）：
+#   $env:GOOS="linux"; $env:GOARCH="amd64"; $env:CGO_ENABLED="0"
+#   go build -trimpath -ldflags="-s -w" -o gateway-linux ./cmd/gateway
+#   docker compose up -d --build
+FROM alpine:latest
+WORKDIR /app
+COPY gateway-linux /app/gateway
+EXPOSE 7777
+ENTRYPOINT ["/app/gateway", "--config", "/app/config.json"]

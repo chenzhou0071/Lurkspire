@@ -1,0 +1,36 @@
+# Lurkspire 一键部署：MySQL 容器 + 网关容器（单进程合一）
+# 用法：
+#   1. cp .env.example .env                                # 填数据库密码
+#   2. cp config.docker.json.example config.docker.json    # 填同样密码 + token 密钥
+#   3. docker compose up -d --build
+#   4. docker compose logs -f gateway                      # 看启动日志（应见 "存储: MySQL ✓"）
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${LURKSPIRE_DB_PASS:-change-me}
+      MYSQL_DATABASE: lurkspire
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro # 首次启动自动建表+种子
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysql", "-h", "localhost", "-uroot", "-p${LURKSPIRE_DB_PASS:-change-me}", "-e", "SELECT 1"]
+      interval: 5s
+      retries: 12
+      start_period: 20s # 初始化期间不判失败（防网关过早启动重试）
+
+  gateway:
+    build:
+      context: .
+      dockerfile: ${GATEWAY_DOCKERFILE:-Dockerfile} # 默认多阶段自构建；拉不到 golang 镜像时用 Dockerfile.prebuilt（本地交叉编译方案）
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "7777:7777" # 客户端连服端口（裸 TCP）
+    volumes:
+      - ./config.docker.json:/app/config.json:ro # mysql_dsn 指向服务名 mysql:3306
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

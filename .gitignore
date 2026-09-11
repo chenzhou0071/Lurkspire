@@ -1,7 +1,11 @@
 # 本地配置（含数据库凭据——不追踪；模板见 config.json.example）
 config.json
+# 容器部署本地配置（含凭据——不追踪；模板见 config.docker.json.example / .env.example）
+config.docker.json
+.env
 
 # Go
 *.exe
 *.test
 *.out
+gateway-linux
