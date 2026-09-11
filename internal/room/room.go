@@ -13,12 +13,13 @@ var ErrRoomFull = errors.New("room: full")
 
 // Config 房间配置（M2 固定值；M3 可由匹配系统注入）
 type Config struct {
-	MaxPlayers  int
-	TickHz      int
-	Speed       float32 // T3 简化移动速度（T4 换成验证版）
-	SpawnRange  float32 // 出生点随机范围
-	SettleScore int     // 先到 N 分结算（0 = 关闭分数结算）
-	SettleTicks int64   // 时长上限（tick 数；0 = 无限）
+	MaxPlayers          int
+	TickHz              int
+	Speed               float32 // T3 简化移动速度（T4 换成验证版）
+	SpawnRange          float32 // 出生点随机范围
+	SettleScore         int     // 先到 N 分结算（0 = 关闭分数结算）
+	SettleTicks         int64   // 时长上限（tick 数；0 = 无限）
+	ReconnectGraceTicks int     // 断线宽限（tick；0=默认 900=30s——宽限内重连恢复对局）
 }
 
 // Player 房间内玩家状态（与 protocol.PlayerState 同构，多服务器内部字段）
@@ -35,6 +36,9 @@ type Player struct {
 	LastReportTick int64 // 最后上报帧（超时判定用）
 	Suspicious     int   // 非法移动次数（踢出候选）
 	FirstReport    bool  // 首次上报（出生传送合法——跳过位移校验）
+	// 断线宽限（重连恢复）
+	Online       bool // 在线（断线 = false——宽限内保留玩家与状态）
+	OfflineTicks int  // 离线计时（tick——超宽限淘汰）
 	// 战斗状态（服务端权威）
 	Score       int     // 击杀数
 	Deaths      int     // 死亡数（计分板）
@@ -82,6 +86,11 @@ type equipMsg struct {
 	result     chan error
 }
 
+type onlineMsg struct {
+	uid    uint32
+	online bool
+}
+
 type joinMsg struct {
 	uid    uint32
 	result chan error
@@ -98,18 +107,24 @@ type Room struct {
 	players map[uint32]*Player
 	combat  *Combat
 
-	inputCh chan inputMsg
-	joinCh  chan joinMsg
-	leaveCh chan leaveMsg
-	equipCh chan equipMsg
-	brCh    chan func(msgID uint16, body []byte)
+	inputCh  chan inputMsg
+	joinCh   chan joinMsg
+	leaveCh  chan leaveMsg
+	equipCh  chan equipMsg
+	onlineCh chan onlineMsg
+	brCh     chan func(msgID uint16, body []byte)
+	emptyCh  chan func(name string)
 
 	tick          int64
 	pendingEvents []protocol.HitEvent // 本帧命中事件（T6 广播）
 	settled       bool                // 结算已广播（锁存不重复）
+	emptied       bool                // 房间已空通知（锁存只发一次）
+	hadPlayers    bool                // 曾有玩家（防刚建的空房误触发 onEmpty）
 
 	// 广播回调（T6 网关推送用；nil = 无消费者——单测直接读 pendingEvents）
 	onBroadcast func(msgID uint16, body []byte)
+	// 空房回调（离线淘汰殆尽——hub 清理元信息/销毁房间）
+	onEmpty func(name string)
 }
 
 func NewRoom(id string, cfg Config) *Room {
@@ -119,16 +134,21 @@ func NewRoom(id string, cfg Config) *Room {
 	if cfg.TickHz <= 0 {
 		cfg.TickHz = 30
 	}
+	if cfg.ReconnectGraceTicks <= 0 {
+		cfg.ReconnectGraceTicks = 900 // 30s @30Hz（断线宽限——重连恢复对局）
+	}
 	r := &Room{
-		id:      id,
-		cfg:     cfg,
-		stop:    make(chan struct{}),
-		players: make(map[uint32]*Player),
-		inputCh: make(chan inputMsg, 64),
-		joinCh:  make(chan joinMsg),
-		leaveCh: make(chan leaveMsg),
-		equipCh: make(chan equipMsg, 8),
-		brCh:    make(chan func(msgID uint16, body []byte), 4),
+		id:       id,
+		cfg:      cfg,
+		stop:     make(chan struct{}),
+		players:  make(map[uint32]*Player),
+		inputCh:  make(chan inputMsg, 64),
+		joinCh:   make(chan joinMsg),
+		leaveCh:  make(chan leaveMsg),
+		equipCh:  make(chan equipMsg, 8),
+		onlineCh: make(chan onlineMsg, 8),
+		brCh:     make(chan func(msgID uint16, body []byte), 4),
+		emptyCh:  make(chan func(name string), 4),
 	}
 	r.combat = NewCombat(r.players, MapWalls)
 	go r.loop()
@@ -173,6 +193,19 @@ func (r *Room) SetBroadcast(fn func(msgID uint16, body []byte)) {
 	r.brCh <- fn
 }
 
+// SetOnEmpty 注册空房回调（玩家全部离开/离线淘汰殆尽——只触发一次）
+func (r *Room) SetOnEmpty(fn func(name string)) {
+	r.emptyCh <- fn
+}
+
+// SetOffline 置离线（断线宽限——保留玩家与状态；超宽限自动淘汰）
+func (r *Room) SetOffline(uid uint32) {
+	select {
+	case r.onlineCh <- onlineMsg{uid: uid, online: false}:
+	default: // 队列忙则丢弃：下次断线/淘汰仍能兜底
+	}
+}
+
 // DrainEvents 取走本帧命中/死亡事件（T6 广播源；loop 外调用走 channel）
 func (r *Room) DrainEvents() []protocol.HitEvent {
 	ch := make(chan []protocol.HitEvent, 1)
@@ -190,7 +223,8 @@ func (r *Room) loop() {
 			return
 		case <-ticker.C:
 			r.tick++
-			r.combat.TickCombat() // 冷却/充能/重生推进
+			r.combat.TickCombat()  // 冷却/充能/重生推进
+			r.tickOfflinePlayers() // 离线宽限计时与淘汰（空房通知）
 			if r.onBroadcast != nil {
 				r.broadcastTick() // 状态 + 事件 + 结算检查（30Hz）
 			}
@@ -202,8 +236,15 @@ func (r *Room) loop() {
 			delete(r.players, m.uid)
 		case m := <-r.equipCh:
 			m.result <- r.applyEquip(m.uid, m.blockBonus)
+		case m := <-r.onlineCh:
+			if p := r.players[m.uid]; p != nil {
+				p.Online = m.online
+				p.OfflineTicks = 0
+			}
 		case fn := <-r.brCh:
 			r.onBroadcast = fn
+		case fn := <-r.emptyCh:
+			r.onEmpty = fn
 		}
 	}
 }
@@ -255,8 +296,11 @@ func (r *Room) settleReason() string {
 }
 
 func (r *Room) addPlayer(uid uint32) error {
-	if _, ok := r.players[uid]; ok {
-		return nil // 重复加入：幂等
+	if p, ok := r.players[uid]; ok {
+		// 已在房（重连恢复）：置回在线、清离线计时——位置/血量/分数全部保留
+		p.Online = true
+		p.OfflineTicks = 0
+		return nil
 	}
 	if len(r.players) >= r.cfg.MaxPlayers {
 		return ErrRoomFull
@@ -264,8 +308,29 @@ func (r *Room) addPlayer(uid uint32) error {
 	// 出生点：随机出生位（含高层平台——复活不贴脸）
 	sp := PickSpawn()
 	r.players[uid] = &Player{UID: uid, HP: 100, Block: BaseBlockMax, BlockMax: BaseBlockMax,
-		X: sp.X, Y: sp.Y, Z: sp.Z, LastReportTick: r.tick, FirstReport: true}
+		X: sp.X, Y: sp.Y, Z: sp.Z, LastReportTick: r.tick, FirstReport: true, Online: true}
+	r.hadPlayers = true
+	r.emptied = false // 新玩家加入：重新武装空房通知（防二次空房无法销毁）
 	return nil
+}
+
+// tickOfflinePlayers 离线宽限：计时 → 超限淘汰；玩家清空 → onEmpty（只通知一次）
+func (r *Room) tickOfflinePlayers() {
+	for uid, p := range r.players {
+		if p.Online {
+			continue
+		}
+		p.OfflineTicks++
+		if p.OfflineTicks >= r.cfg.ReconnectGraceTicks {
+			delete(r.players, uid) // 超宽限：真淘汰（重连窗口关闭）
+		}
+	}
+	if len(r.players) == 0 && r.hadPlayers && !r.emptied {
+		r.emptied = true
+		if r.onEmpty != nil {
+			r.onEmpty(r.id)
+		}
+	}
 }
 
 // SetPlayerEquip 应用玩家装备格挡加成（进房/换装后——值由 hub 从 equipments 表计算）

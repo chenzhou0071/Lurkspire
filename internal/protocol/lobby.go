@@ -12,6 +12,7 @@ const (
 	MsgLoginResp         = 201 // 登录应答（errCode/token/uid/nickname）
 	MsgReg               = 202 // 注册（account+password+nickname）
 	MsgRegResp           = 203 // 注册应答（errCode/uid）
+	MsgReconnect         = 204 // Token 重连（断线免密恢复——body=token 字符串，应答同 MsgLoginResp）
 	MsgFriendSearch      = 210 // 按昵称搜索
 	MsgFriendSearchR     = 211 // 搜索结果（目标 uid/昵称/是否已好友）
 	MsgFriendInvite      = 212 // 发邀请（目标 uid）
@@ -67,6 +68,19 @@ func getStr(b []byte, off int) (string, int, bool) {
 
 // ---- 登录/注册 ----
 
+// EncodeReconnect token → body（u16 len + utf8）——断线重连免密认证
+func EncodeReconnect(token string) []byte {
+	b := make([]byte, 2+len(token))
+	putStr(b, 0, token)
+	return b
+}
+
+// DecodeReconnect body → token（短数据返回 false）
+func DecodeReconnect(b []byte) (string, bool) {
+	token, _, ok := getStr(b, 0)
+	return token, ok
+}
+
 // EncodeLogin account+password → body
 func EncodeLogin(account, password string) []byte {
 	b := make([]byte, 2+len(account)+2+len(password))
@@ -108,7 +122,7 @@ func DecodeReg(b []byte) (string, string, string, bool) {
 	return account, password, nickname, ok
 }
 
-// EncodeLoginResp errCode(1) + token(u16+bytes) + uid(4) + nickname(u16+bytes)
+// EncodeLoginResp errCode(1) + token(u16)+uid(4)+nickname(u16) → 登录/重连应答
 func EncodeLoginResp(errCode uint8, token string, uid uint32, nickname string) []byte {
 	b := make([]byte, 1+2+len(token)+4+2+len(nickname))
 	b[0] = errCode
@@ -117,6 +131,21 @@ func EncodeLoginResp(errCode uint8, token string, uid uint32, nickname string) [
 	off += 4
 	putStr(b, off, nickname)
 	return b
+}
+
+// DecodeLoginResp body → errCode/token/uid/nickname（重连测试/对拍用）
+func DecodeLoginResp(b []byte) (uint8, string, uint32, string, bool) {
+	if len(b) < 1 {
+		return 0, "", 0, "", false
+	}
+	errCode := b[0]
+	token, off, ok := getStr(b, 1)
+	if !ok || len(b) < off+4 {
+		return 0, "", 0, "", false
+	}
+	uid := binary.BigEndian.Uint32(b[off:])
+	nick, _, ok2 := getStr(b, off+4)
+	return errCode, token, uid, nick, ok2
 }
 
 // EncodeRegResp errCode(1) + uid(4)

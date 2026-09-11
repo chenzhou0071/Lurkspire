@@ -59,9 +59,18 @@ func (h *Hub) OnLogin(s *Session) {
 	h.SendBagList(s)     // 背包装备（进对局前应用——跑步/二段跳/弹夹/格挡）
 }
 
-// OnDisconnect 连接断开：出房 + 在线移除 + 好友离线推送
+// OnDisconnect 连接断开：在房=宽限离线（重连可恢复）；在线表移除 + 好友离线推送
 func (h *Hub) OnDisconnect(s *Session) {
-	h.Leave(s) // 出房（若在房）
+	// 在房：仅移除会话路由 + 置离线（玩家/血量/分数保留——超宽限房间自动淘汰）
+	if r := s.room(); r != nil {
+		s.clearRoom()
+		r.SetOffline(s.LoginUID)
+		h.mu.Lock()
+		if set, ok := h.roomSessions[r]; ok {
+			delete(set, s.UID)
+		}
+		h.mu.Unlock()
+	}
 	h.mu.Lock()
 	if s.LoggedIn {
 		delete(h.online, s.LoginUID)
@@ -385,6 +394,20 @@ func (h *Hub) Join(s *Session, roomName string) (*room.Room, []protocol.PlayerSt
 		r.SetBroadcast(func(msgID uint16, body []byte) {
 			h.broadcastToRoom(r, msgID, body)
 		})
+		// 空房（全部离开/离线淘汰殆尽）→ 清理元信息 + 销毁房间
+		r.SetOnEmpty(func(name string) {
+			go func() { // 异步二次确认（回调在房间 loop 内不能同步查询；防清空瞬间新玩家加入的竞态）
+				if len(r.StateSnapshot()) != 0 {
+					return // 又有玩家了：不销毁
+				}
+				h.mu.Lock()
+				delete(h.roomSessions, r)
+				h.mu.Unlock()
+				h.roomRegistry.remove(name)
+				h.manager.DestroyRoom(name)
+				h.broadcastRoomList()
+			}()
+		})
 	}
 	h.roomSessions[r][s.UID] = s
 	h.mu.Unlock()
@@ -425,23 +448,17 @@ func (h *Hub) syncRoomNames(r *room.Room, joiner *Session) {
 	}
 }
 
-// Leave 玩家离开：出房 + 空房销毁（同步元信息移除）
+// Leave 玩家离开（主动退出）：出房 + 人数广播；房间销毁统一由 room.onEmpty 触发
 func (h *Hub) Leave(s *Session) {
 	r := s.room()
 	if r == nil {
 		return
 	}
-	roomName := r.ID()
 	s.clearRoom()
 	r.RemovePlayer(s.LoginUID)
 	h.mu.Lock()
 	if set, ok := h.roomSessions[r]; ok {
-		delete(set, s.UID)
-		if len(set) == 0 {
-			delete(h.roomSessions, r)
-			h.roomRegistry.remove(roomName) // 空房销毁：元信息同步移除
-			h.manager.DestroyRoom(roomName)
-		}
+		delete(set, s.UID) // 空房销毁由 room.onEmpty 异步兜底（含离线淘汰路径）
 	}
 	h.mu.Unlock()
 	h.broadcastRoomList() // 人数/列表变更广播

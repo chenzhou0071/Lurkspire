@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"lurkspire/server/internal/lobby"
 	"lurkspire/server/internal/protocol"
@@ -33,7 +34,15 @@ type Session struct {
 	closed   atomic.Bool
 	closedCh chan struct{} // 关闭通知（写协程退出——避免 close(writeCh) 与 Send 竞态）
 	once     sync.Once
+
+	lastActive atomic.Int64 // 最后活跃时间（UnixNano——收到任何帧刷新；心跳超时踢出用）
 }
+
+// touch 刷新活跃时间（每收到一帧调用）
+func (s *Session) touch() { s.lastActive.Store(time.Now().UnixNano()) }
+
+// LastActive 最后活跃时间（watchdog 检查用）
+func (s *Session) LastActive() int64 { return s.lastActive.Load() }
 
 // room 安全读当前房间
 func (s *Session) room() *room.Room {
@@ -66,6 +75,7 @@ func NewSession(conn net.Conn, hub *Hub, uid uint32) *Session {
 		writeCh:  make(chan []byte, 128),
 		closedCh: make(chan struct{}),
 	}
+	s.touch()        // 初始活跃时间
 	go s.writeLoop() // 写协程：队列 → conn（阻塞只影响自己）
 	return s
 }
@@ -81,6 +91,7 @@ func (s *Session) Serve() {
 			}
 			return
 		}
+		s.touch() // 活跃刷新（心跳超时踢出判定）
 		s.handle(f)
 	}
 }
@@ -140,6 +151,8 @@ func (s *Session) handle(f *protocol.Frame) {
 		s.handleReg(f.Body)
 	case protocol.MsgLogin:
 		s.handleLogin(f.Body)
+	case protocol.MsgReconnect:
+		s.handleReconnect(f.Body)
 	default:
 		// 其余消息需登录态（M3 大厅/房间全部业务在登录后）
 		if !s.LoggedIn {
@@ -240,6 +253,33 @@ func (s *Session) handleLogin(body []byte) {
 		Body:  protocol.EncodeLoginResp(protocol.LobbyOK, token, uid, nick),
 	}))
 	s.hub.OnLogin(s) // 好友系统：在线注册 + 上线推送 + 补发离线邀请 + 好友列表
+}
+
+// handleReconnect Token 重连（断线后免密恢复会话身份——应答同登录）
+func (s *Session) handleReconnect(body []byte) {
+	if s.LoggedIn {
+		s.sendErr(protocol.LobbyErrBadInput, "已登录")
+		return
+	}
+	token, ok := protocol.DecodeReconnect(body)
+	if !ok || token == "" {
+		s.sendErr(protocol.LobbyErrBadInput, "bad reconnect body")
+		return
+	}
+	uid, err := s.hub.Lobby().Verify(token)
+	if err != nil {
+		s.sendErr(protocol.LobbyErrToken, "登录已过期，请重新登录")
+		return
+	}
+	nick, _ := s.hub.Lobby().Nickname(uid)
+	s.LoginUID = uid
+	s.Nickname = nick
+	s.LoggedIn = true
+	s.Send(protocol.Encode(&protocol.Frame{
+		MsgID: protocol.MsgLoginResp,
+		Body:  protocol.EncodeLoginResp(protocol.LobbyOK, token, uid, nick),
+	}))
+	s.hub.OnLogin(s) // 在线注册 + 好友/房间列表/背包推送（与首次登录一致）
 }
 
 func (s *Session) sendErr(errCode uint8, msg string) {
